@@ -13,8 +13,8 @@ import re
 from datetime import datetime
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
 import nest_asyncio
-from dotenv import load_dotenv
-load_dotenv()  # Load environment variables from .env file
+# from dotenv import load_dotenv
+# load_dotenv()  # Load environment variables from .env file
 nest_asyncio.apply()
 
 # Config from env vars
