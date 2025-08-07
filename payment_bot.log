@@ -1,0 +1,209 @@
+2025-08-07 00:30:37,470 - __main__ - ERROR - main:608 - Fatal error: Required environment variable TELEGRAM_TOKEN is not set!
+Traceback (most recent call last):
+  File "C:\Users\boris\D_disc_Boris\BORIS\stuff\9_TONES\APPS\telegram_bot\bot.py", line 572, in main
+    config = Config()
+  File "C:\Users\boris\D_disc_Boris\BORIS\stuff\9_TONES\APPS\telegram_bot\bot.py", line 28, in __init__
+    self.TELEGRAM_TOKEN = self._get_required_env('TELEGRAM_TOKEN')
+                          ~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^
+  File "C:\Users\boris\D_disc_Boris\BORIS\stuff\9_TONES\APPS\telegram_bot\bot.py", line 46, in _get_required_env
+    raise ValueError(f"Required environment variable {key} is not set!")
+ValueError: Required environment variable TELEGRAM_TOKEN is not set!
+2025-08-07 00:32:56,665 - __main__ - INFO - main:574 - Configuration loaded successfully
+2025-08-07 00:32:57,411 - __main__ - INFO - _init_services:131 - OpenAI client initialized
+2025-08-07 00:32:57,415 - __main__ - INFO - _init_services:144 - Google Sheets client initialized
+2025-08-07 00:32:57,418 - __main__ - INFO - _load_customers:169 - Loaded 328 customers
+2025-08-07 00:32:58,904 - apscheduler.scheduler - INFO - add_job:507 - Adding job tentatively -- it will be properly scheduled when the scheduler starts
+2025-08-07 00:32:58,905 - __main__ - INFO - main:597 - Starting bot...
+2025-08-07 00:32:59,205 - apscheduler.scheduler - INFO - _real_add_job:1090 - Added job "<lambda>" to job store "default"
+2025-08-07 00:32:59,206 - apscheduler.scheduler - INFO - start:214 - Scheduler started
+2025-08-07 00:32:59,290 - __main__ - INFO - main:603 - Bot is running. Press Ctrl+C to stop.
+2025-08-07 00:33:08,910 - apscheduler.executors.default - INFO - run_coroutine_job:179 - Running job "<lambda> (trigger: interval[0:05:00], next run at: 2025-08-06 20:38:08 UTC)" (scheduled at 2025-08-06 20:33:08.902330+00:00)
+2025-08-07 00:33:08,911 - telegram.ext.Application - ERROR - process_error:1936 - No error handlers are registered, logging exception.
+Traceback (most recent call last):
+  File "C:\Users\boris\AppData\Roaming\Python\Python313\site-packages\telegram\ext\_jobqueue.py", line 997, in _run
+    await self.callback(context)
+TypeError: object NoneType can't be used in 'await' expression
+2025-08-07 00:33:08,915 - apscheduler.executors.default - INFO - run_coroutine_job:203 - Job "<lambda> (trigger: interval[0:05:00], next run at: 2025-08-06 20:38:08 UTC)" executed successfully
+2025-08-07 00:33:24,409 - __main__ - ERROR - record_payment:457 - Failed to record payment to Sheets: ('invalid_grant: Invalid JWT Signature.', {'error': 'invalid_grant', 'error_description': 'Invalid JWT Signature.'})
+2025-08-07 00:38:08,924 - apscheduler.executors.default - INFO - run_coroutine_job:179 - Running job "<lambda> (trigger: interval[0:05:00], next run at: 2025-08-06 20:43:08 UTC)" (scheduled at 2025-08-06 20:38:08.902330+00:00)
+2025-08-07 00:38:08,927 - telegram.ext.Application - ERROR - process_error:1936 - No error handlers are registered, logging exception.
+Traceback (most recent call last):
+  File "C:\Users\boris\AppData\Roaming\Python\Python313\site-packages\telegram\ext\_jobqueue.py", line 997, in _run
+    await self.callback(context)
+TypeError: object NoneType can't be used in 'await' expression
+2025-08-07 00:38:08,933 - apscheduler.executors.default - INFO - run_coroutine_job:203 - Job "<lambda> (trigger: interval[0:05:00], next run at: 2025-08-06 20:43:08 UTC)" executed successfully
+2025-08-07 00:38:15,134 - apscheduler.scheduler - INFO - shutdown:245 - Scheduler has been shut down
+2025-08-07 00:38:22,734 - __main__ - INFO - main:696 - Configuration loaded successfully
+2025-08-07 00:38:23,458 - __main__ - INFO - _init_services:132 - OpenAI client initialized successfully
+2025-08-07 00:38:23,459 - __main__ - INFO - _init_services:149 - Loading credentials from: credentials.json
+2025-08-07 00:38:23,465 - __main__ - INFO - _init_services:159 - Testing Google Sheets connection...
+2025-08-07 00:38:23,959 - __main__ - ERROR - _init_services:191 - Common causes:
+2025-08-07 00:38:23,960 - __main__ - ERROR - _init_services:192 - 1. Invalid credentials.json file
+2025-08-07 00:38:23,961 - __main__ - ERROR - _init_services:193 - 2. Google Sheets API not enabled in Google Cloud
+2025-08-07 00:38:23,961 - __main__ - ERROR - _init_services:194 - 3. Sheet not shared with service account email
+2025-08-07 00:38:23,962 - __main__ - ERROR - main:731 - Fatal error: ('invalid_grant: Invalid JWT Signature.', {'error': 'invalid_grant', 'error_description': 'Invalid JWT Signature.'})
+Traceback (most recent call last):
+  File "C:\Users\boris\D_disc_Boris\BORIS\stuff\9_TONES\APPS\telegram_bot\bot.py", line 699, in main
+    bot = PaymentBot(config)
+  File "C:\Users\boris\D_disc_Boris\BORIS\stuff\9_TONES\APPS\telegram_bot\bot.py", line 123, in __init__
+    self._init_services()
+    ~~~~~~~~~~~~~~~~~~~^^
+  File "C:\Users\boris\D_disc_Boris\BORIS\stuff\9_TONES\APPS\telegram_bot\bot.py", line 161, in _init_services
+    test_sheet = self.sheets_client.open(self.config.SHEET_NAME)
+  File "C:\Users\boris\AppData\Roaming\Python\Python313\site-packages\gspread\client.py", line 145, in open
+    spreadsheet_files, response = self._list_spreadsheet_files(title, folder_id)
+                                  ~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^
+  File "C:\Users\boris\AppData\Roaming\Python\Python313\site-packages\gspread\client.py", line 118, in _list_spreadsheet_files
+    response = self.http_client.request("get", url, params=params)
+  File "C:\Users\boris\AppData\Roaming\Python\Python313\site-packages\gspread\http_client.py", line 114, in request
+    response = self.session.request(
+        method=method,
+    ...<6 lines>...
+        timeout=self.timeout,
+    )
+  File "C:\Users\boris\AppData\Roaming\Python\Python313\site-packages\google\auth\transport\requests.py", line 535, in request
+    self.credentials.before_request(auth_request, method, url, request_headers)
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\boris\AppData\Roaming\Python\Python313\site-packages\google\auth\credentials.py", line 239, in before_request
+    self._blocking_refresh(request)
+    ~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^
+  File "C:\Users\boris\AppData\Roaming\Python\Python313\site-packages\google\auth\credentials.py", line 202, in _blocking_refresh
+    self.refresh(request)
+    ~~~~~~~~~~~~^^^^^^^^^
+  File "C:\Users\boris\AppData\Roaming\Python\Python313\site-packages\google\oauth2\service_account.py", line 448, in refresh
+    access_token, expiry, _ = _client.jwt_grant(
+                              ~~~~~~~~~~~~~~~~~^
+        request, self._token_uri, assertion
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "C:\Users\boris\AppData\Roaming\Python\Python313\site-packages\google\oauth2\_client.py", line 299, in jwt_grant
+    response_data = _token_endpoint_request(
+        request,
+    ...<5 lines>...
+        },
+    )
+  File "C:\Users\boris\AppData\Roaming\Python\Python313\site-packages\google\oauth2\_client.py", line 270, in _token_endpoint_request
+    _handle_error_response(response_data, retryable_error)
+    ~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\boris\AppData\Roaming\Python\Python313\site-packages\google\oauth2\_client.py", line 69, in _handle_error_response
+    raise exceptions.RefreshError(
+        error_details, response_data, retryable=retryable_error
+    )
+google.auth.exceptions.RefreshError: ('invalid_grant: Invalid JWT Signature.', {'error': 'invalid_grant', 'error_description': 'Invalid JWT Signature.'})
+2025-08-07 00:38:32,271 - __main__ - INFO - main:696 - Configuration loaded successfully
+2025-08-07 00:38:32,972 - __main__ - INFO - _init_services:132 - OpenAI client initialized successfully
+2025-08-07 00:38:32,973 - __main__ - INFO - _init_services:149 - Loading credentials from: credentials.json
+2025-08-07 00:38:32,979 - __main__ - INFO - _init_services:159 - Testing Google Sheets connection...
+2025-08-07 00:38:33,441 - __main__ - ERROR - _init_services:191 - Common causes:
+2025-08-07 00:38:33,441 - __main__ - ERROR - _init_services:192 - 1. Invalid credentials.json file
+2025-08-07 00:38:33,442 - __main__ - ERROR - _init_services:193 - 2. Google Sheets API not enabled in Google Cloud
+2025-08-07 00:38:33,443 - __main__ - ERROR - _init_services:194 - 3. Sheet not shared with service account email
+2025-08-07 00:38:33,443 - __main__ - ERROR - main:731 - Fatal error: ('invalid_grant: Invalid JWT Signature.', {'error': 'invalid_grant', 'error_description': 'Invalid JWT Signature.'})
+Traceback (most recent call last):
+  File "C:\Users\boris\D_disc_Boris\BORIS\stuff\9_TONES\APPS\telegram_bot\bot.py", line 699, in main
+    bot = PaymentBot(config)
+  File "C:\Users\boris\D_disc_Boris\BORIS\stuff\9_TONES\APPS\telegram_bot\bot.py", line 123, in __init__
+    self._init_services()
+    ~~~~~~~~~~~~~~~~~~~^^
+  File "C:\Users\boris\D_disc_Boris\BORIS\stuff\9_TONES\APPS\telegram_bot\bot.py", line 161, in _init_services
+    test_sheet = self.sheets_client.open(self.config.SHEET_NAME)
+  File "C:\Users\boris\AppData\Roaming\Python\Python313\site-packages\gspread\client.py", line 145, in open
+    spreadsheet_files, response = self._list_spreadsheet_files(title, folder_id)
+                                  ~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^
+  File "C:\Users\boris\AppData\Roaming\Python\Python313\site-packages\gspread\client.py", line 118, in _list_spreadsheet_files
+    response = self.http_client.request("get", url, params=params)
+  File "C:\Users\boris\AppData\Roaming\Python\Python313\site-packages\gspread\http_client.py", line 114, in request
+    response = self.session.request(
+        method=method,
+    ...<6 lines>...
+        timeout=self.timeout,
+    )
+  File "C:\Users\boris\AppData\Roaming\Python\Python313\site-packages\google\auth\transport\requests.py", line 535, in request
+    self.credentials.before_request(auth_request, method, url, request_headers)
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\boris\AppData\Roaming\Python\Python313\site-packages\google\auth\credentials.py", line 239, in before_request
+    self._blocking_refresh(request)
+    ~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^
+  File "C:\Users\boris\AppData\Roaming\Python\Python313\site-packages\google\auth\credentials.py", line 202, in _blocking_refresh
+    self.refresh(request)
+    ~~~~~~~~~~~~^^^^^^^^^
+  File "C:\Users\boris\AppData\Roaming\Python\Python313\site-packages\google\oauth2\service_account.py", line 448, in refresh
+    access_token, expiry, _ = _client.jwt_grant(
+                              ~~~~~~~~~~~~~~~~~^
+        request, self._token_uri, assertion
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "C:\Users\boris\AppData\Roaming\Python\Python313\site-packages\google\oauth2\_client.py", line 299, in jwt_grant
+    response_data = _token_endpoint_request(
+        request,
+    ...<5 lines>...
+        },
+    )
+  File "C:\Users\boris\AppData\Roaming\Python\Python313\site-packages\google\oauth2\_client.py", line 270, in _token_endpoint_request
+    _handle_error_response(response_data, retryable_error)
+    ~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\boris\AppData\Roaming\Python\Python313\site-packages\google\oauth2\_client.py", line 69, in _handle_error_response
+    raise exceptions.RefreshError(
+        error_details, response_data, retryable=retryable_error
+    )
+google.auth.exceptions.RefreshError: ('invalid_grant: Invalid JWT Signature.', {'error': 'invalid_grant', 'error_description': 'Invalid JWT Signature.'})
+2025-08-07 00:39:09,524 - __main__ - INFO - main:696 - Configuration loaded successfully
+2025-08-07 00:39:10,485 - __main__ - INFO - _init_services:132 - OpenAI client initialized successfully
+2025-08-07 00:39:10,486 - __main__ - INFO - _init_services:149 - Loading credentials from: credentials.json
+2025-08-07 00:39:10,491 - __main__ - INFO - _init_services:159 - Testing Google Sheets connection...
+2025-08-07 00:39:10,911 - __main__ - ERROR - _init_services:191 - Common causes:
+2025-08-07 00:39:10,912 - __main__ - ERROR - _init_services:192 - 1. Invalid credentials.json file
+2025-08-07 00:39:10,912 - __main__ - ERROR - _init_services:193 - 2. Google Sheets API not enabled in Google Cloud
+2025-08-07 00:39:10,912 - __main__ - ERROR - _init_services:194 - 3. Sheet not shared with service account email
+2025-08-07 00:39:10,913 - __main__ - ERROR - main:731 - Fatal error: ('invalid_grant: Invalid JWT Signature.', {'error': 'invalid_grant', 'error_description': 'Invalid JWT Signature.'})
+Traceback (most recent call last):
+  File "C:\Users\boris\D_disc_Boris\BORIS\stuff\9_TONES\APPS\telegram_bot\bot.py", line 699, in main
+    bot = PaymentBot(config)
+  File "C:\Users\boris\D_disc_Boris\BORIS\stuff\9_TONES\APPS\telegram_bot\bot.py", line 123, in __init__
+    self._init_services()
+    ~~~~~~~~~~~~~~~~~~~^^
+  File "C:\Users\boris\D_disc_Boris\BORIS\stuff\9_TONES\APPS\telegram_bot\bot.py", line 161, in _init_services
+    test_sheet = self.sheets_client.open(self.config.SHEET_NAME)
+  File "C:\Users\boris\AppData\Roaming\Python\Python313\site-packages\gspread\client.py", line 145, in open
+    spreadsheet_files, response = self._list_spreadsheet_files(title, folder_id)
+                                  ~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^
+  File "C:\Users\boris\AppData\Roaming\Python\Python313\site-packages\gspread\client.py", line 118, in _list_spreadsheet_files
+    response = self.http_client.request("get", url, params=params)
+  File "C:\Users\boris\AppData\Roaming\Python\Python313\site-packages\gspread\http_client.py", line 114, in request
+    response = self.session.request(
+        method=method,
+    ...<6 lines>...
+        timeout=self.timeout,
+    )
+  File "C:\Users\boris\AppData\Roaming\Python\Python313\site-packages\google\auth\transport\requests.py", line 535, in request
+    self.credentials.before_request(auth_request, method, url, request_headers)
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\boris\AppData\Roaming\Python\Python313\site-packages\google\auth\credentials.py", line 239, in before_request
+    self._blocking_refresh(request)
+    ~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^
+  File "C:\Users\boris\AppData\Roaming\Python\Python313\site-packages\google\auth\credentials.py", line 202, in _blocking_refresh
+    self.refresh(request)
+    ~~~~~~~~~~~~^^^^^^^^^
+  File "C:\Users\boris\AppData\Roaming\Python\Python313\site-packages\google\oauth2\service_account.py", line 448, in refresh
+    access_token, expiry, _ = _client.jwt_grant(
+                              ~~~~~~~~~~~~~~~~~^
+        request, self._token_uri, assertion
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "C:\Users\boris\AppData\Roaming\Python\Python313\site-packages\google\oauth2\_client.py", line 299, in jwt_grant
+    response_data = _token_endpoint_request(
+        request,
+    ...<5 lines>...
+        },
+    )
+  File "C:\Users\boris\AppData\Roaming\Python\Python313\site-packages\google\oauth2\_client.py", line 270, in _token_endpoint_request
+    _handle_error_response(response_data, retryable_error)
+    ~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\boris\AppData\Roaming\Python\Python313\site-packages\google\oauth2\_client.py", line 69, in _handle_error_response
+    raise exceptions.RefreshError(
+        error_details, response_data, retryable=retryable_error
+    )
+google.auth.exceptions.RefreshError: ('invalid_grant: Invalid JWT Signature.', {'error': 'invalid_grant', 'error_description': 'Invalid JWT Signature.'})
