@@ -6,7 +6,8 @@
       "Bash(find:*)",
       "Bash(cp:*)",
       "Bash(taskkill:*)",
-      "Bash(wmic:*)"
+      "Bash(wmic:*)",
+      "Bash(chmod:*)"
     ],
     "deny": []
   }

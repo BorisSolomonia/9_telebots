@@ -1,0 +1,50 @@
+:80 {
+	log {
+		output stdout
+		format console
+	}
+
+	# Health check endpoint
+	@health { path /health }
+	respond @health "OK" 200
+
+	# Bot status endpoints
+	handle /bots/payment/status {
+		reverse_proxy payment-bot:8000
+	}
+
+	handle /bots/order/status {
+		reverse_proxy order-bot:8001
+	}
+
+	# Default response for root
+	handle /* {
+		respond "9-Tones Telegram Bots - Status: Running" 200
+	}
+
+	# Enable compression
+	encode gzip zstd
+
+	# Basic security headers
+	header {
+		# Remove server info
+		-Server
+		# Security headers
+		X-Content-Type-Options nosniff
+		X-Frame-Options DENY
+		X-XSS-Protection "1; mode=block"
+		Referrer-Policy strict-origin-when-cross-origin
+	}
+
+	# Rate limiting
+	@ratelimit {
+		not remote_ip 127.0.0.1 ::1
+	}
+	rate_limit @ratelimit {
+		zone bot_requests {
+			key {remote_ip}
+			events 60
+			window 1m
+		}
+	}
+}

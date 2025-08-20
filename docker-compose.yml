@@ -1,0 +1,78 @@
+version: "3.9"
+
+services:
+  # Payment Bot
+  payment-bot:
+    build: .
+    container_name: payment-bot
+    restart: unless-stopped
+    command: ["python", "bot.py"]
+    env_file: [.env]
+    expose: ["8000"]
+    networks: [web]
+    mem_limit: 512m
+    cpus: "0.3"
+    volumes:
+      - ./logs:/app/logs
+    healthcheck:
+      test: ["CMD", "python", "-c", "import sys; sys.exit(0)"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    depends_on:
+      - caddy
+
+  # Order Bot
+  order-bot:
+    build: .
+    container_name: order-bot
+    restart: unless-stopped
+    command: ["python", "order_bot.py"]
+    env_file: [.env]
+    expose: ["8001"]
+    networks: [web]
+    mem_limit: 512m
+    cpus: "0.3"
+    volumes:
+      - ./logs:/app/logs
+    healthcheck:
+      test: ["CMD", "python", "-c", "import sys; sys.exit(0)"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    depends_on:
+      - caddy
+
+  # Caddy Reverse Proxy
+  caddy:
+    image: caddy:2-alpine
+    container_name: caddy
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+      - caddy_logs:/var/log/caddy
+    networks: [web]
+    mem_limit: 128m
+    cpus: "0.25"
+    healthcheck:
+      test: ["CMD", "caddy", "version"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+volumes:
+  caddy_data:
+    external: true
+  caddy_config:
+  caddy_logs:
+
+networks:
+  web:
+    external: true
