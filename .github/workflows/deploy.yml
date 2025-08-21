@@ -255,20 +255,20 @@ jobs:
           echo "🚀 Deploying to VM using startup script..."
           
           # Upload and execute deployment script via startup script
-          gcloud compute instances add-metadata telegram-bots-vm \
-            --zone=europe-west3-a \
+          gcloud compute instances add-metadata vm-runtime \
+            --zone=europe-west3-b \
             --project=${{ env.PROJECT_ID }} \
             --metadata-from-file startup-script=deploy-script.sh
           
           # Restart the VM to trigger startup script
           echo "🔄 Restarting VM to trigger deployment..."
-          gcloud compute instances stop telegram-bots-vm \
-            --zone=europe-west3-a \
+          gcloud compute instances stop vm-runtime \
+            --zone=europe-west3-b \
             --project=${{ env.PROJECT_ID }} \
             --quiet
           
-          gcloud compute instances start telegram-bots-vm \
-            --zone=europe-west3-a \
+          gcloud compute instances start vm-runtime \
+            --zone=europe-west3-b \
             --project=${{ env.PROJECT_ID }} \
             --quiet
           
@@ -280,8 +280,8 @@ jobs:
           echo "🔍 Running health checks..."
           
           # Get VM external IP
-          VM_IP=$(gcloud compute instances describe telegram-bots-vm \
-            --zone=europe-west3-a \
+          VM_IP=$(gcloud compute instances describe vm-runtime \
+            --zone=europe-west3-b \
             --project=${{ env.PROJECT_ID }} \
             --format='get(networkInterfaces[0].accessConfigs[0].natIP)')
           
