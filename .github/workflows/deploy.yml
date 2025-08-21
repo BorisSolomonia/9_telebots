@@ -74,87 +74,244 @@ jobs:
           docker push "${IMAGE}:${{ github.sha }}"
           docker push "${IMAGE}:latest"
 
-      - name: 📤 Upload Deployment Files
+      - name: 📤 Create Deployment Script
         run: |
-          echo "📤 Uploading deployment files to VM..."
+          echo "📝 Creating deployment script..."
           
-          # Create temporary directory for files
-          mkdir -p /tmp/deploy-files
-          cp docker-compose.yml Caddyfile .dockerignore /tmp/deploy-files/
+          cat > deploy-script.sh << 'EOF'
+          #!/bin/bash
+          set -e
           
-          # Upload files using gcloud scp
-          gcloud compute scp /tmp/deploy-files/* \
-            ${{ secrets.VM_SSH_USER }}@telegram-bots-vm:${{ env.DEPLOY_PATH }}/ \
-            --zone=europe-west3-a \
-            --project=${{ env.PROJECT_ID }} \
-            --recurse
+          echo "🚀 Starting Telegram Bots deployment..."
+          
+          # Setup deployment directory
+          sudo mkdir -p ${{ env.DEPLOY_PATH }}
+          sudo chown -R $(whoami):$(whoami) ${{ env.DEPLOY_PATH }}
+          cd ${{ env.DEPLOY_PATH }}
+          
+          # Download deployment files from artifact registry metadata (as a workaround)
+          # Create docker-compose.yml
+          cat > docker-compose.yml << 'COMPOSE_EOF'
+          version: "3.9"
+          
+          services:
+            # Payment Bot
+            payment-bot:
+              image: ${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/apps/telegram-bots:latest
+              container_name: payment-bot
+              restart: unless-stopped
+              command: ["python", "bot.py"]
+              env_file: [.env]
+              expose: ["8000"]
+              networks: [web]
+              mem_limit: 512m
+              cpus: "0.3"
+              volumes:
+                - ./logs:/app/logs
+              healthcheck:
+                test: ["CMD", "python", "-c", "import sys; sys.exit(0)"]
+                interval: 30s
+                timeout: 10s
+                retries: 3
+                start_period: 30s
+              depends_on:
+                - caddy
+          
+            # Order Bot
+            order-bot:
+              image: ${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/apps/telegram-bots:latest
+              container_name: order-bot
+              restart: unless-stopped
+              command: ["python", "order_bot.py"]
+              env_file: [.env]
+              expose: ["8001"]
+              networks: [web]
+              mem_limit: 512m
+              cpus: "0.3"
+              volumes:
+                - ./logs:/app/logs
+              healthcheck:
+                test: ["CMD", "python", "-c", "import sys; sys.exit(0)"]
+                interval: 30s
+                timeout: 10s
+                retries: 3
+                start_period: 30s
+              depends_on:
+                - caddy
+          
+            # Caddy Reverse Proxy
+            caddy:
+              image: caddy:2-alpine
+              container_name: caddy
+              restart: unless-stopped
+              ports:
+                - "80:80"
+                - "443:443"
+              volumes:
+                - ./Caddyfile:/etc/caddy/Caddyfile:ro
+                - caddy_data:/data
+                - caddy_config:/config
+                - caddy_logs:/var/log/caddy
+              networks: [web]
+              mem_limit: 128m
+              cpus: "0.25"
+              healthcheck:
+                test: ["CMD", "caddy", "version"]
+                interval: 30s
+                timeout: 10s
+                retries: 3
+          
+          volumes:
+            caddy_data:
+              external: true
+            caddy_config:
+            caddy_logs:
+          
+          networks:
+            web:
+              external: true
+          COMPOSE_EOF
+          
+          # Create Caddyfile
+          cat > Caddyfile << 'CADDY_EOF'
+          :80 {
+          	log {
+          		output stdout
+          		format console
+          	}
+          
+          	# Health check endpoint
+          	@health { path /health }
+          	respond @health "OK" 200
+          
+          	# Bot status endpoints
+          	handle /bots/payment/status {
+          		reverse_proxy payment-bot:8000
+          	}
+          
+          	handle /bots/order/status {
+          		reverse_proxy order-bot:8001
+          	}
+          
+          	# Default response for root
+          	handle /* {
+          		respond "9-Tones Telegram Bots - Status: Running" 200
+          	}
+          
+          	# Enable compression
+          	encode gzip zstd
+          
+          	# Basic security headers
+          	header {
+          		# Remove server info
+          		-Server
+          		# Security headers
+          		X-Content-Type-Options nosniff
+          		X-Frame-Options DENY
+          		X-XSS-Protection "1; mode=block"
+          		Referrer-Policy strict-origin-when-cross-origin
+          	}
+          
+          	# Rate limiting
+          	@ratelimit {
+          		not remote_ip 127.0.0.1 ::1
+          	}
+          	rate_limit @ratelimit {
+          		zone bot_requests {
+          			key {remote_ip}
+          			events 60
+          			window 1m
+          		}
+          	}
+          }
+          CADDY_EOF
+          
+          # Fetch runtime secrets from Secret Manager
+          echo "🔐 Fetching secrets..."
+          gcloud secrets versions access latest \
+            --secret="telegram-bots-env" \
+            --project=${{ env.PROJECT_ID }} > .env
+          
+          # Create logs directory
+          mkdir -p logs
+          
+          # Pull latest images
+          echo "📥 Pulling Docker images..."
+          gcloud auth configure-docker ${{ env.REGION }}-docker.pkg.dev --quiet
+          docker compose pull
+          
+          # Deploy the stack
+          echo "🚀 Deploying containers..."
+          docker compose down --remove-orphans || true
+          docker compose up -d --wait
+          
+          echo "✅ Telegram bots deployment completed!"
+          EOF
+          
+          chmod +x deploy-script.sh
 
-      - name: 🚀 Deploy Telegram Bots
+      - name: 🚀 Deploy via VM Startup Script
         run: |
-          echo "🚀 Deploying Telegram Bots via gcloud ssh..."
+          echo "🚀 Deploying to VM using startup script..."
           
-          gcloud compute ssh ${{ secrets.VM_SSH_USER }}@telegram-bots-vm \
+          # Upload and execute deployment script via startup script
+          gcloud compute instances add-metadata telegram-bots-vm \
             --zone=europe-west3-a \
             --project=${{ env.PROJECT_ID }} \
-            --command="
-            echo '🚀 Deploying Telegram Bots...'
-            
-            # Setup deployment directory
-            sudo mkdir -p ${{ env.DEPLOY_PATH }}
-            sudo chown -R \$USER:\$USER ${{ env.DEPLOY_PATH }}
-            cd ${{ env.DEPLOY_PATH }}
-            
-            # Fetch runtime secrets from Secret Manager
-            gcloud secrets versions access latest \
-              --secret='telegram-bots-env' \
-              --project=${{ env.PROJECT_ID }} > .env
-            
-            # Update docker-compose to use registry image
-            sed -i 's|build: .|image: ${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/apps/telegram-bots:latest|g' docker-compose.yml
-            
-            # Pull latest images
-            gcloud auth configure-docker ${{ env.REGION }}-docker.pkg.dev --quiet
-            docker compose pull
-            
-            # Deploy the stack
-            docker compose down --remove-orphans
-            docker compose up -d --wait
-            
-            echo '✅ Telegram bots deployment completed'
-            "
+            --metadata-from-file startup-script=deploy-script.sh
+          
+          # Restart the VM to trigger startup script
+          echo "🔄 Restarting VM to trigger deployment..."
+          gcloud compute instances stop telegram-bots-vm \
+            --zone=europe-west3-a \
+            --project=${{ env.PROJECT_ID }} \
+            --quiet
+          
+          gcloud compute instances start telegram-bots-vm \
+            --zone=europe-west3-a \
+            --project=${{ env.PROJECT_ID }} \
+            --quiet
+          
+          echo "⏳ Waiting for VM to start and deployment to complete..."
+          sleep 120  # Wait for startup script to complete
 
       - name: 🔍 Health Check
         run: |
-          echo "🔍 Running health checks via gcloud ssh..."
+          echo "🔍 Running health checks..."
           
-          gcloud compute ssh ${{ secrets.VM_SSH_USER }}@telegram-bots-vm \
+          # Get VM external IP
+          VM_IP=$(gcloud compute instances describe telegram-bots-vm \
             --zone=europe-west3-a \
             --project=${{ env.PROJECT_ID }} \
-            --command="
-            echo '🔍 Testing telegram bot deployment...'
-            
-            # Wait for services to be ready
-            sleep 30
-            
-            # Change to deployment directory
-            cd ${{ env.DEPLOY_PATH }}
-            
-            # Test health endpoint
-            if curl -f --connect-timeout 10 http://localhost/health >/dev/null 2>&1; then
-              echo '✅ Health check passed'
+            --format='get(networkInterfaces[0].accessConfigs[0].natIP)')
+          
+          echo "VM IP: $VM_IP"
+          
+          # Wait for services to be ready
+          echo "⏳ Waiting for services to start..."
+          sleep 60
+          
+          # Test health endpoint
+          echo "🔍 Testing health endpoint..."
+          for i in {1..10}; do
+            if curl -f --connect-timeout 10 "http://$VM_IP/health" >/dev/null 2>&1; then
+              echo "✅ Health check passed on attempt $i"
+              break
             else
-              echo '❌ Health check failed'
-              curl -v http://localhost/health
-              exit 1
+              echo "❌ Health check failed on attempt $i, retrying..."
+              if [ $i -eq 10 ]; then
+                echo "❌ Health check failed after 10 attempts"
+                curl -v "http://$VM_IP/health" || true
+                exit 1
+              fi
+              sleep 30
             fi
-            
-            # Test bot status endpoints
-            curl -f http://localhost/bots/payment/status && echo '✅ Payment bot OK' || echo '⚠️ Payment bot status unavailable'
-            curl -f http://localhost/bots/order/status && echo '✅ Order bot OK' || echo '⚠️ Order bot status unavailable'
-            
-            echo '🐳 Container status:'
-            docker ps --format 'table {{.Names}}\t{{.Status}}\t{{.Ports}}'
-            
-            echo '📋 Recent logs:'
-            docker compose logs --tail=10
-            "
+          done
+          
+          # Test specific endpoints
+          echo "🤖 Testing bot endpoints..."
+          curl -f "http://$VM_IP/" && echo "✅ Main endpoint OK" || echo "⚠️ Main endpoint unavailable"
+          curl -f "http://$VM_IP/bots/payment/status" && echo "✅ Payment bot OK" || echo "⚠️ Payment bot status unavailable"
+          curl -f "http://$VM_IP/bots/order/status" && echo "✅ Order bot OK" || echo "⚠️ Order bot status unavailable"
+          
+          echo "✅ Deployment health check completed"
