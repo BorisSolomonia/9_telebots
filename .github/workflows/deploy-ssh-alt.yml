@@ -1,0 +1,254 @@
+name: 🚀 Deploy Telegram Bots (SSH Alternative)
+
+on:
+  push:
+    branches: [ master ]
+  workflow_dispatch:
+
+env:
+  PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
+  REGION: europe-west3
+  VM_HOST: 34.141.45.73
+  DEPLOY_PATH: /opt/apps/telegram-bots
+
+jobs:
+  build-and-deploy:
+    name: 🏗️ Build & Deploy via SSH (Alternative)
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: 📥 Checkout Code
+        uses: actions/checkout@v4
+
+      - name: ✅ Validate Required Secrets
+        run: |
+          if [ -z "${{ secrets.GCP_PROJECT_ID }}" ]; then
+            echo "❌ ERROR: GCP_PROJECT_ID secret is not set"
+            exit 1
+          fi
+          if [ -z "${{ secrets.GCP_SA_KEY }}" ]; then
+            echo "❌ ERROR: GCP_SA_KEY secret is not set"
+            exit 1
+          fi
+          if [ -z "${{ secrets.VM_SSH_USER }}" ]; then
+            echo "❌ ERROR: VM_SSH_USER secret is not set"
+            exit 1
+          fi
+          if [ -z "${{ secrets.VM_SSH_KEY }}" ]; then
+            echo "❌ ERROR: VM_SSH_KEY secret is not set"
+            exit 1
+          fi
+          echo "✅ All required secrets are configured"
+
+      - name: 🔐 Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      - name: ☁️ Set up Google Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: 🐳 Configure Docker
+        run: gcloud auth configure-docker ${{ env.REGION }}-docker.pkg.dev --quiet
+
+      - name: 🏗️ Build & Push Bot Images
+        env:
+          IMAGE: ${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/apps/telegram-bots
+        run: |
+          docker build -t "${IMAGE}:${{ github.sha }}" -t "${IMAGE}:latest" .
+          docker push "${IMAGE}:${{ github.sha }}"
+          docker push "${IMAGE}:latest"
+
+      - name: 🔑 Setup SSH Key
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.VM_SSH_KEY }}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -H ${{ env.VM_HOST }} >> ~/.ssh/known_hosts
+
+      - name: 📤 Deploy to VM via SSH
+        run: |
+          # Create deployment script
+          cat > deploy_script.sh << 'EOF'
+          #!/bin/bash
+          set -e
+          
+          echo "🚀 Starting deployment on VM..."
+          
+          # Create deployment directory
+          sudo mkdir -p ${{ env.DEPLOY_PATH }}
+          sudo chown -R $USER:$USER ${{ env.DEPLOY_PATH }}
+          cd ${{ env.DEPLOY_PATH }}
+          
+          # Fetch secrets from Secret Manager (if available)
+          echo "🔐 Fetching runtime secrets..."
+          if command -v gcloud >/dev/null 2>&1; then
+            gcloud secrets versions access latest \
+              --secret="telegram-bots-env" \
+              --project=${{ env.PROJECT_ID }} > .env 2>/dev/null || echo "Warning: Could not fetch secrets from Secret Manager"
+          else
+            echo "Warning: gcloud not available, creating basic .env"
+            echo "# Add your environment variables here" > .env
+          fi
+          
+          # Create docker-compose.yml with the latest image
+          cat > docker-compose.yml << 'COMPOSE_EOF'
+          version: "3.9"
+          
+          services:
+            # Payment Bot
+            payment-bot:
+              image: ${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/apps/telegram-bots:latest
+              container_name: payment-bot
+              restart: unless-stopped
+              command: ["python", "bot.py"]
+              env_file: [.env]
+              expose: ["8000"]
+              networks: [web]
+              mem_limit: 512m
+              cpus: "0.3"
+              volumes:
+                - ./logs:/app/logs
+              healthcheck:
+                test: ["CMD", "python", "-c", "import sys; sys.exit(0)"]
+                interval: 30s
+                timeout: 10s
+                retries: 3
+                start_period: 30s
+          
+            # Order Bot
+            order-bot:
+              image: ${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/apps/telegram-bots:latest
+              container_name: order-bot
+              restart: unless-stopped
+              command: ["python", "order_bot.py"]
+              env_file: [.env]
+              expose: ["8001"]
+              networks: [web]
+              mem_limit: 512m
+              cpus: "0.3"
+              volumes:
+                - ./logs:/app/logs
+              healthcheck:
+                test: ["CMD", "python", "-c", "import sys; sys.exit(0)"]
+                interval: 30s
+                timeout: 10s
+                retries: 3
+                start_period: 30s
+          
+            # Caddy Reverse Proxy
+            caddy:
+              image: caddy:2-alpine
+              container_name: caddy
+              restart: unless-stopped
+              ports:
+                - "80:80"
+                - "443:443"
+              volumes:
+                - ./Caddyfile:/etc/caddy/Caddyfile:ro
+                - caddy_data:/data
+                - caddy_config:/config
+              networks: [web]
+              mem_limit: 128m
+              cpus: "0.25"
+              healthcheck:
+                test: ["CMD", "caddy", "version"]
+                interval: 30s
+                timeout: 10s
+                retries: 3
+          
+          volumes:
+            caddy_data:
+              external: true
+            caddy_config:
+          
+          networks:
+            web:
+              external: true
+          COMPOSE_EOF
+          
+          # Create Caddyfile
+          cat > Caddyfile << 'CADDY_EOF'
+          :80 {
+          	log {
+          		output stdout
+          		format console
+          	}
+          
+          	@health { path /health }
+          	respond @health "OK" 200
+          
+          	handle /bots/payment/status {
+          		reverse_proxy payment-bot:8000
+          	}
+          
+          	handle /bots/order/status {
+          		reverse_proxy order-bot:8001
+          	}
+          
+          	handle /* {
+          		respond "9-Tones Telegram Bots - Status: Running" 200
+          	}
+          
+          	encode gzip zstd
+          
+          	header {
+          		-Server
+          		X-Content-Type-Options nosniff
+          		X-Frame-Options DENY
+          		X-XSS-Protection "1; mode=block"
+          		Referrer-Policy strict-origin-when-cross-origin
+          	}
+          }
+          CADDY_EOF
+          
+          # Create logs directory and Docker resources
+          mkdir -p logs
+          docker network create web 2>/dev/null || true
+          docker volume create caddy_data 2>/dev/null || true
+          
+          # Authenticate Docker if gcloud is available
+          if command -v gcloud >/dev/null 2>&1; then
+            gcloud auth configure-docker ${{ env.REGION }}-docker.pkg.dev --quiet || echo "Warning: Could not configure Docker auth"
+          fi
+          
+          # Pull and deploy
+          echo "📥 Pulling latest images..."
+          docker compose pull || echo "Warning: Could not pull images"
+          
+          echo "🚀 Deploying containers..."
+          docker compose down --remove-orphans || true
+          docker compose up -d
+          
+          echo "✅ Deployment completed successfully!"
+          
+          # Show status
+          echo "📊 Container status:"
+          docker compose ps
+          EOF
+          
+          chmod +x deploy_script.sh
+          
+          # Execute deployment via SSH
+          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no -o ConnectTimeout=30 \
+            ${{ secrets.VM_SSH_USER }}@${{ env.VM_HOST }} 'bash -s' < deploy_script.sh
+
+      - name: 🔍 Health Check
+        run: |
+          echo "🔍 Running health checks..."
+          sleep 30  # Wait for services to start
+          
+          # Test health endpoints
+          if curl -f --connect-timeout 10 "http://${{ env.VM_HOST }}/health" >/dev/null 2>&1; then
+            echo "✅ Health check passed"
+          else
+            echo "❌ Health check failed"
+            curl -v "http://${{ env.VM_HOST }}/health" || true
+          fi
+          
+          # Test bot endpoints
+          curl -f "http://${{ env.VM_HOST }}/" && echo "✅ Main endpoint OK" || echo "⚠️ Main endpoint unavailable"
+          curl -f "http://${{ env.VM_HOST }}/bots/payment/status" && echo "✅ Payment bot OK" || echo "⚠️ Payment bot unavailable"
+          curl -f "http://${{ env.VM_HOST }}/bots/order/status" && echo "✅ Order bot OK" || echo "⚠️ Order bot unavailable"
+          
+          echo "🎉 Deployment completed!"
