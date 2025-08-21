@@ -94,6 +94,14 @@ gcloud projects add-iam-policy-binding $PROJECT_ID \
     --member="serviceAccount:${SA_EMAIL}" \
     --role="roles/iam.serviceAccountUser"
 
+# CRITICAL: Allow GitHub SA to use VM's service account
+echo "Adding permission to use VM's service account..."
+VM_SA_EMAIL="vm-runtime@${PROJECT_ID}.iam.gserviceaccount.com"
+gcloud iam service-accounts add-iam-policy-binding $VM_SA_EMAIL \
+    --member="serviceAccount:${SA_EMAIL}" \
+    --role="roles/iam.serviceAccountUser" \
+    --project=$PROJECT_ID
+
 # Step 4: Wait for propagation and verify
 echo ""
 echo "4️⃣ Waiting for IAM propagation (30 seconds)..."
