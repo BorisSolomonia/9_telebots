@@ -75,32 +75,38 @@ jobs:
           docker push "${IMAGE}:latest"
 
       - name: 📤 Upload Deployment Files
-        uses: appleboy/scp-action@v0.1.7
-        with:
-          host: ${{ env.VM_HOST }}
-          username: ${{ secrets.VM_SSH_USER }}
-          key: ${{ secrets.VM_SSH_KEY }}
-          source: "docker-compose.yml,Caddyfile,.dockerignore"
-          target: ${{ env.DEPLOY_PATH }}
-          overwrite: true
+        run: |
+          echo "📤 Uploading deployment files to VM..."
+          
+          # Create temporary directory for files
+          mkdir -p /tmp/deploy-files
+          cp docker-compose.yml Caddyfile .dockerignore /tmp/deploy-files/
+          
+          # Upload files using gcloud scp
+          gcloud compute scp /tmp/deploy-files/* \
+            ${{ secrets.VM_SSH_USER }}@telegram-bots-vm:${{ env.DEPLOY_PATH }}/ \
+            --zone=europe-west3-a \
+            --project=${{ env.PROJECT_ID }} \
+            --recurse
 
       - name: 🚀 Deploy Telegram Bots
-        uses: appleboy/ssh-action@v1.0.3
-        with:
-          host: ${{ env.VM_HOST }}
-          username: ${{ secrets.VM_SSH_USER }}
-          key: ${{ secrets.VM_SSH_KEY }}
-          script: |
-            echo "🚀 Deploying Telegram Bots..."
+        run: |
+          echo "🚀 Deploying Telegram Bots via gcloud ssh..."
+          
+          gcloud compute ssh ${{ secrets.VM_SSH_USER }}@telegram-bots-vm \
+            --zone=europe-west3-a \
+            --project=${{ env.PROJECT_ID }} \
+            --command="
+            echo '🚀 Deploying Telegram Bots...'
             
             # Setup deployment directory
             sudo mkdir -p ${{ env.DEPLOY_PATH }}
-            sudo chown -R $USER:$USER ${{ env.DEPLOY_PATH }}
+            sudo chown -R \$USER:\$USER ${{ env.DEPLOY_PATH }}
             cd ${{ env.DEPLOY_PATH }}
             
             # Fetch runtime secrets from Secret Manager
             gcloud secrets versions access latest \
-              --secret="telegram-bots-env" \
+              --secret='telegram-bots-env' \
               --project=${{ env.PROJECT_ID }} > .env
             
             # Update docker-compose to use registry image
@@ -114,35 +120,41 @@ jobs:
             docker compose down --remove-orphans
             docker compose up -d --wait
             
-            echo "✅ Telegram bots deployment completed"
+            echo '✅ Telegram bots deployment completed'
+            "
 
       - name: 🔍 Health Check
-        uses: appleboy/ssh-action@v1.0.3
-        with:
-          host: ${{ env.VM_HOST }}
-          username: ${{ secrets.VM_SSH_USER }}
-          key: ${{ secrets.VM_SSH_KEY }}
-          script: |
-            echo "🔍 Testing telegram bot deployment..."
+        run: |
+          echo "🔍 Running health checks via gcloud ssh..."
+          
+          gcloud compute ssh ${{ secrets.VM_SSH_USER }}@telegram-bots-vm \
+            --zone=europe-west3-a \
+            --project=${{ env.PROJECT_ID }} \
+            --command="
+            echo '🔍 Testing telegram bot deployment...'
             
             # Wait for services to be ready
             sleep 30
             
+            # Change to deployment directory
+            cd ${{ env.DEPLOY_PATH }}
+            
             # Test health endpoint
             if curl -f --connect-timeout 10 http://localhost/health >/dev/null 2>&1; then
-              echo "✅ Health check passed"
+              echo '✅ Health check passed'
             else
-              echo "❌ Health check failed"
+              echo '❌ Health check failed'
               curl -v http://localhost/health
               exit 1
             fi
             
             # Test bot status endpoints
-            curl -f http://localhost/bots/payment/status && echo "✅ Payment bot OK" || echo "⚠️ Payment bot status unavailable"
-            curl -f http://localhost/bots/order/status && echo "✅ Order bot OK" || echo "⚠️ Order bot status unavailable"
+            curl -f http://localhost/bots/payment/status && echo '✅ Payment bot OK' || echo '⚠️ Payment bot status unavailable'
+            curl -f http://localhost/bots/order/status && echo '✅ Order bot OK' || echo '⚠️ Order bot status unavailable'
             
-            echo "🐳 Container status:"
-            docker ps --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"
+            echo '🐳 Container status:'
+            docker ps --format 'table {{.Names}}\t{{.Status}}\t{{.Ports}}'
             
-            echo "📋 Recent logs:"
+            echo '📋 Recent logs:'
             docker compose logs --tail=10
+            "
