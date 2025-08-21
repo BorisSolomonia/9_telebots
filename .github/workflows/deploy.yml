@@ -29,6 +29,28 @@ jobs:
       - name: 📥 Checkout Code
         uses: actions/checkout@v4
 
+      - name: ✅ Validate Required Secrets
+        run: |
+          if [ -z "${{ secrets.GCP_PROJECT_ID }}" ]; then
+            echo "❌ ERROR: GCP_PROJECT_ID secret is not set"
+            echo "Please add GCP_PROJECT_ID to your GitHub repository secrets"
+            exit 1
+          fi
+          if [ -z "${{ secrets.GCP_SA_KEY }}" ]; then
+            echo "❌ ERROR: GCP_SA_KEY secret is not set"
+            echo "Please add your service account key to GitHub repository secrets"
+            exit 1
+          fi
+          if [ -z "${{ secrets.VM_HOST }}" ]; then
+            echo "❌ ERROR: VM_HOST secret is not set"
+            echo "Please add your VM IP address to GitHub repository secrets"
+            exit 1
+          fi
+          echo "✅ All required secrets are configured"
+          echo "PROJECT_ID: ${{ env.PROJECT_ID }}"
+          echo "VM_HOST: ${{ env.VM_HOST }}"
+          echo "REGION: ${{ env.REGION }}"
+
       - name: 🔐 Authenticate to Google Cloud
         uses: google-github-actions/auth@v2
         with:
