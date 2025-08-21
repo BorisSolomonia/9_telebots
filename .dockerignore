@@ -56,7 +56,6 @@ payment_bot.log
 
 # Secrets and credentials
 credentials*.json
-customers.json
 secrets-setup.sh
 vm-startup.sh
 

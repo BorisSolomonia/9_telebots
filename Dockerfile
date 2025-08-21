@@ -22,6 +22,8 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy source code
 COPY *.py ./
+
+# Copy customers.json (required for bots to work)
 COPY customers.json ./
 
 # Create logs directory
