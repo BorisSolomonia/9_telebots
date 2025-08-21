@@ -1,317 +1,480 @@
-name: 🚀 Deploy Telegram Bots
+#!/usr/bin/env bash
+set -Eeuo pipefail
+LOG="/var/log/telegram-bots-deploy.log"
+exec > >(tee -a "$LOG") 2>&1
+echo "[$(date -Is)] 🚀 Starting Telegram Bots deployment..."
 
-on:
-  push:
-    branches: [ master ]
-  workflow_dispatch:
-    inputs:
-      environment:
-        description: 'Environment to deploy'
-        required: true
-        default: 'production'
-        type: choice
-        options:
-          - production
-          - staging
+trap 'ec=$?; echo "[$(date -Is)] ❌ Failed at line $LINENO (exit $ec)"; exit $ec' ERR
 
-env:
-  PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
-  REGION: europe-west3
-  VM_HOST: ${{ secrets.VM_HOST }}
-  DEPLOY_PATH: /opt/apps/telegram-bots
+PROJECT_ID="${PROJECT_ID}"
+REGION="${REGION}"
+DEPLOY_PATH="${DEPLOY_PATH}"
+IMAGE_REPO="${IMAGE_REPO}"
+IMAGE_TAG="${IMAGE_TAG}"
 
-jobs:
-  build-and-deploy:
-    name: 🏗️ Build & Deploy Telegram Bots
-    runs-on: ubuntu-latest
+echo "[$(date -Is)] Context:"
+echo " - PROJECT_ID=$PROJECT_ID"
+echo " - REGION=$REGION"
+echo " - DEPLOY_PATH=$DEPLOY_PATH"
+echo " - IMAGE=${IMAGE_REPO}:${IMAGE_TAG}"
+
+echo "[$(date -Is)] Preparing deploy dir..."
+mkdir -p "$DEPLOY_PATH"/{logs,config}
+cd "$DEPLOY_PATH"
+
+echo "[$(date -Is)] Writing docker-compose.yml..."
+cat > docker-compose.yml <<COMPOSE
+version: "3.9"
+services:
+  payment-bot:
+    image: ${IMAGE_REPO}:${IMAGE_TAG}
+    container_name: payment-bot
+    restart: unless-stopped
+    command: ["python", "bot.py"]
+    env_file: [.env]
+    expose: ["8000"]
+    networks: [web]
+    mem_limit: 512m
+    cpus: "0.30"
+    volumes:
+      - ./logs:/app/logs
+    healthcheck:
+      test: ["CMD-SHELL","curl -fsS http://localhost:8000/health || exit 1"]
+      interval: 20s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  order-bot:
+    image: ${IMAGE_REPO}:${IMAGE_TAG}
+    container_name: order-bot
+    restart: unless-stopped
+    command: ["python", "order_bot.py"]
+    env_file: [.env]
+    expose: ["8001"]
+    networks: [web]
+    mem_limit: 512m
+    cpus: "0.30"
+    volumes:
+      - ./logs:/app/logs
+    healthcheck:
+      test: ["CMD-SHELL","curl -fsS http://localhost:8001/health || exit 1"]
+      interval: 20s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  caddy:
+    image: caddy:2-alpine
+    container_name: caddy
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      # add "443:443" only if you configure TLS
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+      - caddy_logs:/var/log/caddy
+    networks: [web]
+    mem_limit: 128m
+    cpus: "0.25"
+    healthcheck:
+      test: ["CMD","caddy","version"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    depends_on:
+      payment-bot:
+        condition: service_healthy
+      order-bot:
+        condition: service_healthy
+
+volumes:
+  caddy_data:
+    external: true
+  caddy_config:
+  caddy_logs:
+
+networks:
+  web:
+    external: true
+COMPOSE
+
+echo "[$(date -Is)] Writing Caddyfile..."
+cat > Caddyfile <<'CADDY'
+:80 {
+  log {
+    output stdout
+    format console
+  }
+
+  @health { path /health }
+  respond @health "OK" 200
+
+  handle /bots/payment/status {
+    reverse_proxy payment-bot:8000
+  }
+
+  handle /bots/order/status {
+    reverse_proxy order-bot:8001
+  }
+
+  handle /* {
+    respond "9-Tones Telegram Bots - Status: Running" 200
+  }
+
+  encode gzip zstd
+
+  header {
+    -Server
+    X-Content-Type-Options nosniff
+    X-Frame-Options DENY
+    X-XSS-Protection "1; mode=block"
+    Referrer-Policy strict-origin-when-cross-origin
+  }
+}
+CADDY
+
+echo "[$(date -Is)] Ensuring external network/volume exist..."
+docker network create web || true
+docker volume create caddy_data || true
+
+echo "[$(date -Is)] Fetching .env from Secret Manager..."
+gcloud auth configure-docker ${REGION}-docker.pkg.dev --quiet
+gcloud secrets versions access latest \
+  --secret="telegram-bots-env" \
+  --project="${PROJECT_ID}" > .env
+
+echo "[$(date -Is)] Pulling images..."
+docker compose pull --quiet || true
+
+echo "[$(date -Is)] Deploying stack..."
+docker compose down --remove-orphans || true
+docker compose up -d --wait --timeout 120
+
+echo "[$(date -Is)] Post-deploy: ps + health..."
+docker ps
+docker compose ps
+
+echo "[$(date -Is)] ✅ Deployment completed"
+
+
+
+# name: 🚀 Deploy Telegram Bots
+
+# on:
+#   push:
+#     branches: [ master ]
+#   workflow_dispatch:
+#     inputs:
+#       environment:
+#         description: 'Environment to deploy'
+#         required: true
+#         default: 'production'
+#         type: choice
+#         options:
+#           - production
+#           - staging
+
+# env:
+#   PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
+#   REGION: europe-west3
+#   VM_HOST: ${{ secrets.VM_HOST }}
+#   DEPLOY_PATH: /opt/apps/telegram-bots
+
+# jobs:
+#   build-and-deploy:
+#     name: 🏗️ Build & Deploy Telegram Bots
+#     runs-on: ubuntu-latest
     
-    steps:
-      - name: 📥 Checkout Code
-        uses: actions/checkout@v4
+#     steps:
+#       - name: 📥 Checkout Code
+#         uses: actions/checkout@v4
 
-      - name: ✅ Validate Required Secrets
-        run: |
-          if [ -z "${{ secrets.GCP_PROJECT_ID }}" ]; then
-            echo "❌ ERROR: GCP_PROJECT_ID secret is not set"
-            echo "Please add GCP_PROJECT_ID to your GitHub repository secrets"
-            exit 1
-          fi
-          if [ -z "${{ secrets.GCP_SA_KEY }}" ]; then
-            echo "❌ ERROR: GCP_SA_KEY secret is not set"
-            echo "Please add your service account key to GitHub repository secrets"
-            exit 1
-          fi
-          if [ -z "${{ secrets.VM_HOST }}" ]; then
-            echo "❌ ERROR: VM_HOST secret is not set"
-            echo "Please add your VM IP address to GitHub repository secrets"
-            exit 1
-          fi
-          echo "✅ All required secrets are configured"
-          echo "PROJECT_ID: ${{ env.PROJECT_ID }}"
-          echo "VM_HOST: ${{ env.VM_HOST }}"
-          echo "REGION: ${{ env.REGION }}"
+#       - name: ✅ Validate Required Secrets
+#         run: |
+#           if [ -z "${{ secrets.GCP_PROJECT_ID }}" ]; then
+#             echo "❌ ERROR: GCP_PROJECT_ID secret is not set"
+#             echo "Please add GCP_PROJECT_ID to your GitHub repository secrets"
+#             exit 1
+#           fi
+#           if [ -z "${{ secrets.GCP_SA_KEY }}" ]; then
+#             echo "❌ ERROR: GCP_SA_KEY secret is not set"
+#             echo "Please add your service account key to GitHub repository secrets"
+#             exit 1
+#           fi
+#           if [ -z "${{ secrets.VM_HOST }}" ]; then
+#             echo "❌ ERROR: VM_HOST secret is not set"
+#             echo "Please add your VM IP address to GitHub repository secrets"
+#             exit 1
+#           fi
+#           echo "✅ All required secrets are configured"
+#           echo "PROJECT_ID: ${{ env.PROJECT_ID }}"
+#           echo "VM_HOST: ${{ env.VM_HOST }}"
+#           echo "REGION: ${{ env.REGION }}"
 
-      - name: 🔐 Authenticate to Google Cloud
-        uses: google-github-actions/auth@v2
-        with:
-          credentials_json: ${{ secrets.GCP_SA_KEY }}
+#       - name: 🔐 Authenticate to Google Cloud
+#         uses: google-github-actions/auth@v2
+#         with:
+#           credentials_json: ${{ secrets.GCP_SA_KEY }}
 
-      - name: ☁️ Set up Google Cloud SDK
-        uses: google-github-actions/setup-gcloud@v2
+#       - name: ☁️ Set up Google Cloud SDK
+#         uses: google-github-actions/setup-gcloud@v2
 
-      - name: 🐳 Configure Docker
-        run: gcloud auth configure-docker ${{ env.REGION }}-docker.pkg.dev --quiet
+#       - name: 🐳 Configure Docker
+#         run: gcloud auth configure-docker ${{ env.REGION }}-docker.pkg.dev --quiet
 
-      - name: 🏗️ Build & Push Bot Images
-        env:
-          IMAGE: ${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/apps/telegram-bots
-        run: |
-          # Build unified bot image
-          docker build \
-            --tag "${IMAGE}:${{ github.sha }}" \
-            --tag "${IMAGE}:latest" .
+#       - name: 🏗️ Build & Push Bot Images
+#         env:
+#           IMAGE: ${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/apps/telegram-bots
+#         run: |
+#           # Build unified bot image
+#           docker build \
+#             --tag "${IMAGE}:${{ github.sha }}" \
+#             --tag "${IMAGE}:latest" .
           
-          docker push "${IMAGE}:${{ github.sha }}"
-          docker push "${IMAGE}:latest"
+#           docker push "${IMAGE}:${{ github.sha }}"
+#           docker push "${IMAGE}:latest"
 
-      - name: 📤 Create Deployment Script
-        run: |
-          echo "📝 Creating deployment script..."
+#       - name: 📤 Create Deployment Script
+#         run: |
+#           echo "📝 Creating deployment script..."
           
-          cat > deploy-script.sh << 'EOF'
-          #!/bin/bash
-          set -e
+#           cat > deploy-script.sh << 'EOF'
+#           #!/bin/bash
+#           set -e
           
-          echo "🚀 Starting Telegram Bots deployment..."
+#           echo "🚀 Starting Telegram Bots deployment..."
           
-          # Setup deployment directory
-          sudo mkdir -p ${{ env.DEPLOY_PATH }}
-          sudo chown -R $(whoami):$(whoami) ${{ env.DEPLOY_PATH }}
-          cd ${{ env.DEPLOY_PATH }}
+#           # Setup deployment directory
+#           sudo mkdir -p ${{ env.DEPLOY_PATH }}
+#           sudo chown -R $(whoami):$(whoami) ${{ env.DEPLOY_PATH }}
+#           cd ${{ env.DEPLOY_PATH }}
           
-          # Download deployment files from artifact registry metadata (as a workaround)
-          # Create docker-compose.yml
-          cat > docker-compose.yml << 'COMPOSE_EOF'
-          version: "3.9"
+#           # Download deployment files from artifact registry metadata (as a workaround)
+#           # Create docker-compose.yml
+#           cat > docker-compose.yml << 'COMPOSE_EOF'
+#           version: "3.9"
           
-          services:
-            # Payment Bot
-            payment-bot:
-              image: ${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/apps/telegram-bots:latest
-              container_name: payment-bot
-              restart: unless-stopped
-              command: ["python", "bot.py"]
-              env_file: [.env]
-              expose: ["8000"]
-              networks: [web]
-              mem_limit: 512m
-              cpus: "0.3"
-              volumes:
-                - ./logs:/app/logs
-              healthcheck:
-                test: ["CMD", "python", "-c", "import sys; sys.exit(0)"]
-                interval: 30s
-                timeout: 10s
-                retries: 3
-                start_period: 30s
-              depends_on:
-                - caddy
+#           services:
+#             # Payment Bot
+#             payment-bot:
+#               image: ${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/apps/telegram-bots:latest
+#               container_name: payment-bot
+#               restart: unless-stopped
+#               command: ["python", "bot.py"]
+#               env_file: [.env]
+#               expose: ["8000"]
+#               networks: [web]
+#               mem_limit: 512m
+#               cpus: "0.3"
+#               volumes:
+#                 - ./logs:/app/logs
+#               healthcheck:
+#                 test: ["CMD", "python", "-c", "import sys; sys.exit(0)"]
+#                 interval: 30s
+#                 timeout: 10s
+#                 retries: 3
+#                 start_period: 30s
+#               depends_on:
+#                 - caddy
           
-            # Order Bot
-            order-bot:
-              image: ${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/apps/telegram-bots:latest
-              container_name: order-bot
-              restart: unless-stopped
-              command: ["python", "order_bot.py"]
-              env_file: [.env]
-              expose: ["8001"]
-              networks: [web]
-              mem_limit: 512m
-              cpus: "0.3"
-              volumes:
-                - ./logs:/app/logs
-              healthcheck:
-                test: ["CMD", "python", "-c", "import sys; sys.exit(0)"]
-                interval: 30s
-                timeout: 10s
-                retries: 3
-                start_period: 30s
-              depends_on:
-                - caddy
+#             # Order Bot
+#             order-bot:
+#               image: ${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/apps/telegram-bots:latest
+#               container_name: order-bot
+#               restart: unless-stopped
+#               command: ["python", "order_bot.py"]
+#               env_file: [.env]
+#               expose: ["8001"]
+#               networks: [web]
+#               mem_limit: 512m
+#               cpus: "0.3"
+#               volumes:
+#                 - ./logs:/app/logs
+#               healthcheck:
+#                 test: ["CMD", "python", "-c", "import sys; sys.exit(0)"]
+#                 interval: 30s
+#                 timeout: 10s
+#                 retries: 3
+#                 start_period: 30s
+#               depends_on:
+#                 - caddy
           
-            # Caddy Reverse Proxy
-            caddy:
-              image: caddy:2-alpine
-              container_name: caddy
-              restart: unless-stopped
-              ports:
-                - "80:80"
-                - "443:443"
-              volumes:
-                - ./Caddyfile:/etc/caddy/Caddyfile:ro
-                - caddy_data:/data
-                - caddy_config:/config
-                - caddy_logs:/var/log/caddy
-              networks: [web]
-              mem_limit: 128m
-              cpus: "0.25"
-              healthcheck:
-                test: ["CMD", "caddy", "version"]
-                interval: 30s
-                timeout: 10s
-                retries: 3
+#             # Caddy Reverse Proxy
+#             caddy:
+#               image: caddy:2-alpine
+#               container_name: caddy
+#               restart: unless-stopped
+#               ports:
+#                 - "80:80"
+#                 - "443:443"
+#               volumes:
+#                 - ./Caddyfile:/etc/caddy/Caddyfile:ro
+#                 - caddy_data:/data
+#                 - caddy_config:/config
+#                 - caddy_logs:/var/log/caddy
+#               networks: [web]
+#               mem_limit: 128m
+#               cpus: "0.25"
+#               healthcheck:
+#                 test: ["CMD", "caddy", "version"]
+#                 interval: 30s
+#                 timeout: 10s
+#                 retries: 3
           
-          volumes:
-            caddy_data:
-              external: true
-            caddy_config:
-            caddy_logs:
+#           volumes:
+#             caddy_data:
+#               external: true
+#             caddy_config:
+#             caddy_logs:
           
-          networks:
-            web:
-              external: true
-          COMPOSE_EOF
+#           networks:
+#             web:
+#               external: true
+#           COMPOSE_EOF
           
-          # Create Caddyfile
-          cat > Caddyfile << 'CADDY_EOF'
-          :80 {
-          	log {
-          		output stdout
-          		format console
-          	}
+#           # Create Caddyfile
+#           cat > Caddyfile << 'CADDY_EOF'
+#           :80 {
+#           	log {
+#           		output stdout
+#           		format console
+#           	}
           
-          	# Health check endpoint
-          	@health { path /health }
-          	respond @health "OK" 200
+#           	# Health check endpoint
+#           	@health { path /health }
+#           	respond @health "OK" 200
           
-          	# Bot status endpoints
-          	handle /bots/payment/status {
-          		reverse_proxy payment-bot:8000
-          	}
+#           	# Bot status endpoints
+#           	handle /bots/payment/status {
+#           		reverse_proxy payment-bot:8000
+#           	}
           
-          	handle /bots/order/status {
-          		reverse_proxy order-bot:8001
-          	}
+#           	handle /bots/order/status {
+#           		reverse_proxy order-bot:8001
+#           	}
           
-          	# Default response for root
-          	handle /* {
-          		respond "9-Tones Telegram Bots - Status: Running" 200
-          	}
+#           	# Default response for root
+#           	handle /* {
+#           		respond "9-Tones Telegram Bots - Status: Running" 200
+#           	}
           
-          	# Enable compression
-          	encode gzip zstd
+#           	# Enable compression
+#           	encode gzip zstd
           
-          	# Basic security headers
-          	header {
-          		# Remove server info
-          		-Server
-          		# Security headers
-          		X-Content-Type-Options nosniff
-          		X-Frame-Options DENY
-          		X-XSS-Protection "1; mode=block"
-          		Referrer-Policy strict-origin-when-cross-origin
-          	}
+#           	# Basic security headers
+#           	header {
+#           		# Remove server info
+#           		-Server
+#           		# Security headers
+#           		X-Content-Type-Options nosniff
+#           		X-Frame-Options DENY
+#           		X-XSS-Protection "1; mode=block"
+#           		Referrer-Policy strict-origin-when-cross-origin
+#           	}
           
-          	# Rate limiting
-          	@ratelimit {
-          		not remote_ip 127.0.0.1 ::1
-          	}
-          	rate_limit @ratelimit {
-          		zone bot_requests {
-          			key {remote_ip}
-          			events 60
-          			window 1m
-          		}
-          	}
-          }
-          CADDY_EOF
+#           	# Rate limiting
+#           	@ratelimit {
+#           		not remote_ip 127.0.0.1 ::1
+#           	}
+#           	rate_limit @ratelimit {
+#           		zone bot_requests {
+#           			key {remote_ip}
+#           			events 60
+#           			window 1m
+#           		}
+#           	}
+#           }
+#           CADDY_EOF
           
-          # Fetch runtime secrets from Secret Manager
-          echo "🔐 Fetching secrets..."
-          gcloud secrets versions access latest \
-            --secret="telegram-bots-env" \
-            --project=${{ env.PROJECT_ID }} > .env
+#           # Fetch runtime secrets from Secret Manager
+#           echo "🔐 Fetching secrets..."
+#           gcloud secrets versions access latest \
+#             --secret="telegram-bots-env" \
+#             --project=${{ env.PROJECT_ID }} > .env
           
-          # Create logs directory
-          mkdir -p logs
+#           # Create logs directory
+#           mkdir -p logs
           
-          # Pull latest images
-          echo "📥 Pulling Docker images..."
-          gcloud auth configure-docker ${{ env.REGION }}-docker.pkg.dev --quiet
-          docker compose pull
+#           # Pull latest images
+#           echo "📥 Pulling Docker images..."
+#           gcloud auth configure-docker ${{ env.REGION }}-docker.pkg.dev --quiet
+#           docker compose pull
           
-          # Deploy the stack
-          echo "🚀 Deploying containers..."
-          docker compose down --remove-orphans || true
-          docker compose up -d --wait
+#           # Deploy the stack
+#           echo "🚀 Deploying containers..."
+#           docker compose down --remove-orphans || true
+#           docker compose up -d --wait
           
-          echo "✅ Telegram bots deployment completed!"
-          EOF
+#           echo "✅ Telegram bots deployment completed!"
+#           EOF
           
-          chmod +x deploy-script.sh
+#           chmod +x deploy-script.sh
 
-      - name: 🚀 Deploy via VM Startup Script
-        run: |
-          echo "🚀 Deploying to VM using startup script..."
+#       - name: 🚀 Deploy via VM Startup Script
+#         run: |
+#           echo "🚀 Deploying to VM using startup script..."
           
-          # Upload and execute deployment script via startup script
-          gcloud compute instances add-metadata vm-runtime \
-            --zone=europe-west3-b \
-            --project=${{ env.PROJECT_ID }} \
-            --metadata-from-file startup-script=deploy-script.sh
+#           # Upload and execute deployment script via startup script
+#           gcloud compute instances add-metadata vm-runtime \
+#             --zone=europe-west3-b \
+#             --project=${{ env.PROJECT_ID }} \
+#             --metadata-from-file startup-script=deploy-script.sh
           
-          # Restart the VM to trigger startup script
-          echo "🔄 Restarting VM to trigger deployment..."
-          gcloud compute instances stop vm-runtime \
-            --zone=europe-west3-b \
-            --project=${{ env.PROJECT_ID }} \
-            --quiet
+#           # Restart the VM to trigger startup script
+#           echo "🔄 Restarting VM to trigger deployment..."
+#           gcloud compute instances stop vm-runtime \
+#             --zone=europe-west3-b \
+#             --project=${{ env.PROJECT_ID }} \
+#             --quiet
           
-          gcloud compute instances start vm-runtime \
-            --zone=europe-west3-b \
-            --project=${{ env.PROJECT_ID }} \
-            --quiet
+#           gcloud compute instances start vm-runtime \
+#             --zone=europe-west3-b \
+#             --project=${{ env.PROJECT_ID }} \
+#             --quiet
           
-          echo "⏳ Waiting for VM to start and deployment to complete..."
-          sleep 120  # Wait for startup script to complete
+#           echo "⏳ Waiting for VM to start and deployment to complete..."
+#           sleep 120  # Wait for startup script to complete
 
-      - name: 🔍 Health Check
-        run: |
-          echo "🔍 Running health checks..."
+#       - name: 🔍 Health Check
+#         run: |
+#           echo "🔍 Running health checks..."
           
-          # Get VM external IP
-          VM_IP=$(gcloud compute instances describe vm-runtime \
-            --zone=europe-west3-b \
-            --project=${{ env.PROJECT_ID }} \
-            --format='get(networkInterfaces[0].accessConfigs[0].natIP)')
+#           # Get VM external IP
+#           VM_IP=$(gcloud compute instances describe vm-runtime \
+#             --zone=europe-west3-b \
+#             --project=${{ env.PROJECT_ID }} \
+#             --format='get(networkInterfaces[0].accessConfigs[0].natIP)')
           
-          echo "VM IP: $VM_IP"
+#           echo "VM IP: $VM_IP"
           
-          # Wait for services to be ready
-          echo "⏳ Waiting for services to start..."
-          sleep 60
+#           # Wait for services to be ready
+#           echo "⏳ Waiting for services to start..."
+#           sleep 60
           
-          # Test health endpoint
-          echo "🔍 Testing health endpoint..."
-          for i in {1..10}; do
-            if curl -f --connect-timeout 10 "http://$VM_IP/health" >/dev/null 2>&1; then
-              echo "✅ Health check passed on attempt $i"
-              break
-            else
-              echo "❌ Health check failed on attempt $i, retrying..."
-              if [ $i -eq 10 ]; then
-                echo "❌ Health check failed after 10 attempts"
-                curl -v "http://$VM_IP/health" || true
-                exit 1
-              fi
-              sleep 30
-            fi
-          done
+#           # Test health endpoint
+#           echo "🔍 Testing health endpoint..."
+#           for i in {1..10}; do
+#             if curl -f --connect-timeout 10 "http://$VM_IP/health" >/dev/null 2>&1; then
+#               echo "✅ Health check passed on attempt $i"
+#               break
+#             else
+#               echo "❌ Health check failed on attempt $i, retrying..."
+#               if [ $i -eq 10 ]; then
+#                 echo "❌ Health check failed after 10 attempts"
+#                 curl -v "http://$VM_IP/health" || true
+#                 exit 1
+#               fi
+#               sleep 30
+#             fi
+#           done
           
-          # Test specific endpoints
-          echo "🤖 Testing bot endpoints..."
-          curl -f "http://$VM_IP/" && echo "✅ Main endpoint OK" || echo "⚠️ Main endpoint unavailable"
-          curl -f "http://$VM_IP/bots/payment/status" && echo "✅ Payment bot OK" || echo "⚠️ Payment bot status unavailable"
-          curl -f "http://$VM_IP/bots/order/status" && echo "✅ Order bot OK" || echo "⚠️ Order bot status unavailable"
+#           # Test specific endpoints
+#           echo "🤖 Testing bot endpoints..."
+#           curl -f "http://$VM_IP/" && echo "✅ Main endpoint OK" || echo "⚠️ Main endpoint unavailable"
+#           curl -f "http://$VM_IP/bots/payment/status" && echo "✅ Payment bot OK" || echo "⚠️ Payment bot status unavailable"
+#           curl -f "http://$VM_IP/bots/order/status" && echo "✅ Order bot OK" || echo "⚠️ Order bot status unavailable"
           
-          echo "✅ Deployment health check completed"
+#           echo "✅ Deployment health check completed"
