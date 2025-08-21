@@ -1,0 +1,73 @@
+name: 🚀 Simple Deploy Telegram Bots (No Metadata)
+
+on:
+  push:
+    branches: [ master ]
+  workflow_dispatch:
+
+env:
+  PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
+  REGION: europe-west3
+  IMAGE_NAME: telegram-bots
+
+jobs:
+  build-and-push:
+    name: 🏗️ Build & Push Image
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: 📥 Checkout Code
+        uses: actions/checkout@v4
+
+      - name: ✅ Validate Required Secrets
+        run: |
+          if [ -z "${{ secrets.GCP_PROJECT_ID }}" ]; then
+            echo "❌ ERROR: GCP_PROJECT_ID secret is not set"
+            exit 1
+          fi
+          if [ -z "${{ secrets.GCP_SA_KEY }}" ]; then
+            echo "❌ ERROR: GCP_SA_KEY secret is not set" 
+            exit 1
+          fi
+          echo "✅ All required secrets are configured"
+
+      - name: 🔐 Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      - name: ☁️ Set up Google Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: 🐳 Configure Docker
+        run: gcloud auth configure-docker ${{ env.REGION }}-docker.pkg.dev --quiet
+
+      - name: 🏗️ Build & Push Image
+        env:
+          IMAGE: ${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/apps/${{ env.IMAGE_NAME }}
+        run: |
+          docker build -t "${IMAGE}:${{ github.sha }}" -t "${IMAGE}:latest" .
+          docker push "${IMAGE}:${{ github.sha }}"
+          docker push "${IMAGE}:latest"
+
+  notify-deployment:
+    name: 📢 Notify Deployment Ready
+    needs: build-and-push
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: 🎉 Deployment Image Ready
+        run: |
+          echo "✅ Docker image built and pushed successfully!"
+          echo ""
+          echo "🐳 Image: ${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/apps/${{ env.IMAGE_NAME }}:latest"
+          echo ""
+          echo "📋 Manual deployment steps:"
+          echo "1. SSH into your VM: gcloud compute ssh vm-runtime --zone=europe-west3-b"
+          echo "2. Run: sudo mkdir -p /opt/apps/telegram-bots"
+          echo "3. Run: cd /opt/apps/telegram-bots"
+          echo "4. Create .env file with your secrets"
+          echo "5. Create docker-compose.yml with the new image"
+          echo "6. Run: docker compose up -d"
+          echo ""
+          echo "🌐 Your bots will be available at: http://34.141.45.73"
