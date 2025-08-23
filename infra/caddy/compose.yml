@@ -1,0 +1,71 @@
+version: '3.9'
+
+services:
+  caddy:
+    image: caddy:2-alpine
+    container_name: caddy-proxy
+    restart: unless-stopped
+    
+    # Port mapping for HTTP/HTTPS
+    ports:
+      - "80:80"
+      - "443:443"
+    
+    # Configuration and data persistence
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+      - caddy_logs:/var/log/caddy
+    
+    # Environment variables for dynamic configuration
+    environment:
+      - DOMAIN=${DOMAIN:-localhost}
+      - BOT_SERVICE_NAME=${BOT_SERVICE_NAME:-order-bot-secure}
+      - HEALTH_PORT=${HEALTH_PORT:-8080}
+    
+    # Network configuration
+    networks:
+      - web
+      - bot_internal
+    
+    # Resource limits
+    deploy:
+      resources:
+        limits:
+          memory: 128M
+          cpus: '0.25'
+        reservations:
+          memory: 32M
+          cpus: '0.1'
+    
+    # Health check
+    healthcheck:
+      test: ["CMD", "caddy", "version"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    
+    # Security settings
+    user: "1000:1000"
+    
+    # Labels for monitoring
+    labels:
+      - "traefik.enable=false"  # If using Traefik elsewhere
+      - "service.name=caddy-proxy"
+      - "service.version=2.0"
+
+volumes:
+  caddy_data:
+    external: true
+  caddy_config:
+    driver: local
+  caddy_logs:
+    driver: local
+
+networks:
+  web:
+    external: true
+  bot_internal:
+    external: true

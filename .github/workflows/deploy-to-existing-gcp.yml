@@ -1,0 +1,356 @@
+name: 🚀 Deploy to Existing GCP Infrastructure
+
+on:
+  push:
+    branches: [ main, master ]
+    paths:
+      - 'improved_order_bot.py'
+      - 'config_template.py'
+      - 'secure-docker-setup/**'
+      - 'infra/**'
+      - 'requirements.txt'
+  workflow_dispatch:
+    inputs:
+      force_rebuild:
+        description: 'Force rebuild of Docker images'
+        required: false
+        default: false
+        type: boolean
+
+env:
+  PROJECT_ID: "nine-tones-bots-2025-468320"
+  REGION: "us-central1"
+  ZONE: "us-central1-c"
+  AR_REPO: "tasty-ar"
+  VM_NAME: "tasty-tones-1"
+  VM_IP: "35.225.153.97"
+  APP_NAME: "telegram-bot"
+  SERVICE_NAME: "order-bot-secure"
+
+jobs:
+  security-scan:
+    name: 🔒 Security Scan
+    runs-on: ubuntu-latest
+    steps:
+      - name: 📥 Checkout Code
+        uses: actions/checkout@v4
+
+      - name: 🔍 Scan for Hardcoded Secrets
+        run: |
+          echo "🔍 Scanning for hardcoded credentials..."
+          
+          # Check for exposed tokens
+          if grep -r "TELEGRAM_TOKEN.*=" . --include="*.py" --exclude-dir=".git" | grep -v "os.environ" | grep -v "config_template" | grep -v ".yml" | grep -v "template"; then
+            echo "❌ Found hardcoded credentials in source code!"
+            exit 1
+          fi
+          
+          echo "✅ No hardcoded credentials found"
+
+      - name: 🛡️ Run Trivy Vulnerability Scanner
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: 'fs'
+          scan-ref: '.'
+          format: 'table'
+
+  build-and-push:
+    name: 🏗️ Build & Push to Artifact Registry
+    runs-on: ubuntu-latest
+    needs: security-scan
+    outputs:
+      image_digest: ${{ steps.build.outputs.digest }}
+      image_uri: ${{ steps.build.outputs.image_uri }}
+    
+    steps:
+      - name: 📥 Checkout Code
+        uses: actions/checkout@v4
+
+      - name: 🔐 Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      - name: ☁️ Set up Google Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: 🐳 Configure Docker for Artifact Registry
+        run: |
+          gcloud auth configure-docker ${{ env.REGION }}-docker.pkg.dev --quiet
+
+      - name: 🏗️ Build and Push Docker Image
+        id: build
+        run: |
+          IMAGE_URI="${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.AR_REPO }}/${{ env.APP_NAME }}"
+          IMAGE_TAG="${{ github.sha }}"
+          FULL_IMAGE_URI="${IMAGE_URI}:${IMAGE_TAG}"
+          
+          echo "Building image: ${FULL_IMAGE_URI}"
+          
+          # Build with security hardening
+          docker build \
+            -f secure-docker-setup/Dockerfile.secure \
+            -t "${FULL_IMAGE_URI}" \
+            -t "${IMAGE_URI}:latest" \
+            --label "org.opencontainers.image.source=${{ github.repositoryUrl }}" \
+            --label "org.opencontainers.image.revision=${{ github.sha }}" \
+            --label "org.opencontainers.image.created=$(date -u +'%Y-%m-%dT%H:%M:%SZ')" \
+            .
+          
+          echo "Pushing image to Artifact Registry..."
+          docker push "${FULL_IMAGE_URI}"
+          docker push "${IMAGE_URI}:latest"
+          
+          echo "image_uri=${FULL_IMAGE_URI}" >> $GITHUB_OUTPUT
+          echo "✅ Image built and pushed successfully"
+
+  deploy-to-vm:
+    name: 🚀 Deploy to Existing VM
+    runs-on: ubuntu-latest
+    needs: build-and-push
+    
+    steps:
+      - name: 📥 Checkout Code
+        uses: actions/checkout@v4
+
+      - name: 🔐 Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      - name: ☁️ Set up Google Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: 📤 Upload Application Files
+        run: |
+          echo "📤 Uploading application files to VM..."
+          
+          # Create application directory structure on VM
+          gcloud compute ssh ${{ env.VM_NAME }} \
+            --zone=${{ env.ZONE }} \
+            --project=${{ env.PROJECT_ID }} \
+            --command="
+              sudo mkdir -p /opt/telegram-bot/{infra/caddy,secure-docker-setup,logs,data}
+              sudo chown -R \$USER:\$USER /opt/telegram-bot
+              
+              # Ensure Docker networks exist
+              docker network create web 2>/dev/null || echo 'Network web exists'
+              docker network create bot_internal --internal 2>/dev/null || echo 'Network bot_internal exists'
+              
+              # Ensure volumes exist
+              docker volume create caddy_data 2>/dev/null || echo 'Volume caddy_data exists'
+              docker volume create telegram-bot_customer_data 2>/dev/null || echo 'Volume customer_data exists'
+            "
+          
+          # Upload infrastructure files
+          gcloud compute scp \
+            --recurse \
+            infra/ \
+            ${{ env.VM_NAME }}:/opt/telegram-bot/infra/ \
+            --zone=${{ env.ZONE }} \
+            --project=${{ env.PROJECT_ID }}
+          
+          # Upload secure Docker setup
+          gcloud compute scp \
+            --recurse \
+            secure-docker-setup/ \
+            ${{ env.VM_NAME }}:/opt/telegram-bot/secure-docker-setup/ \
+            --zone=${{ env.ZONE }} \
+            --project=${{ env.PROJECT_ID }}
+          
+          echo "✅ Files uploaded successfully"
+
+      - name: 🔑 Configure Environment and Secrets
+        run: |
+          echo "🔐 Setting up environment and secrets..."
+          
+          gcloud compute ssh ${{ env.VM_NAME }} \
+            --zone=${{ env.ZONE }} \
+            --project=${{ env.PROJECT_ID }} \
+            --command="
+              cd /opt/telegram-bot
+              
+              # Create .env file from Secret Manager
+              echo 'Creating environment configuration...'
+              cat > .env << 'EOF'
+          TELEGRAM_TOKEN_BOT=\$(gcloud secrets versions access latest --secret=telegram-bot-token --project=${{ env.PROJECT_ID }} 2>/dev/null || echo 'MISSING')
+          ORDER_BOT_TOKEN=\$(gcloud secrets versions access latest --secret=telegram-bot-token --project=${{ env.PROJECT_ID }} 2>/dev/null || echo 'MISSING')
+          OPENAI_API_KEY=\$(gcloud secrets versions access latest --secret=openai-api-key --project=${{ env.PROJECT_ID }} 2>/dev/null || echo 'MISSING')
+          SHEET_NAME=\$(gcloud secrets versions access latest --secret=sheet-name --project=${{ env.PROJECT_ID }} 2>/dev/null || echo '9_ტონა_ფული')
+          WORKSHEET_NAME=\$(gcloud secrets versions access latest --secret=worksheet-name --project=${{ env.PROJECT_ID }} 2>/dev/null || echo 'Payments')
+          CUSTOMERS_FILE=/app/data/customers.json
+          CREDS_FILE=/app/credentials.json
+          LOG_LEVEL=INFO
+          MESSAGE_COOLDOWN=5
+          GPT_CACHE_TTL=300
+          MAX_CACHE_SIZE=1000
+          EOF
+              
+              # Expand environment variables
+              eval \"\$(cat .env)\" && env | grep -E '^(TELEGRAM_|ORDER_|OPENAI_|SHEET_|WORKSHEET_|CUSTOMERS_|CREDS_|LOG_|MESSAGE_|GPT_|MAX_)' > .env.tmp && mv .env.tmp .env
+              
+              # Fetch Google credentials if available
+              if gcloud secrets versions access latest --secret=google-service-account-key --project=${{ env.PROJECT_ID }} > /dev/null 2>&1; then
+                gcloud secrets versions access latest \
+                  --secret=google-service-account-key \
+                  --project=${{ env.PROJECT_ID }} > credentials.json
+                echo '✅ Google credentials fetched'
+              else
+                echo '{\"type\": \"service_account\"}' > credentials.json
+                echo '⚠️  Google credentials secret not found, using placeholder'
+              fi
+              
+              # Set secure permissions
+              chmod 600 .env credentials.json 2>/dev/null || true
+              
+              echo '✅ Environment configured'
+            "
+
+      - name: 🐳 Update Docker Compose Configuration
+        run: |
+          echo "🔧 Updating Docker Compose with new image..."
+          
+          gcloud compute ssh ${{ env.VM_NAME }} \
+            --zone=${{ env.ZONE }} \
+            --project=${{ env.PROJECT_ID }} \
+            --command="
+              cd /opt/telegram-bot
+              
+              # Update secure compose file to use built image
+              sed -i 's|build:.*|image: ${{ needs.build-and-push.outputs.image_uri }}|g' secure-docker-setup/docker-compose.secure.yml
+              sed -i 's|context:.*||g' secure-docker-setup/docker-compose.secure.yml
+              sed -i 's|dockerfile:.*||g' secure-docker-setup/docker-compose.secure.yml
+              
+              # Configure Caddy environment
+              cd infra/caddy
+              cat > .env << EOF
+          DOMAIN=\${DOMAIN:-${{ env.VM_IP }}}
+          BOT_SERVICE_NAME=${{ env.SERVICE_NAME }}
+          HEALTH_PORT=8080
+          ACME_EMAIL=\${ACME_EMAIL:-admin@example.com}
+          EOF
+              
+              echo '✅ Docker configuration updated'
+            "
+
+      - name: 🚀 Deploy Services
+        run: |
+          echo "🚀 Starting deployment..."
+          
+          gcloud compute ssh ${{ env.VM_NAME }} \
+            --zone=${{ env.ZONE }} \
+            --project=${{ env.PROJECT_ID }} \
+            --command="
+              cd /opt/telegram-bot
+              
+              # Configure Docker for Artifact Registry
+              gcloud auth configure-docker ${{ env.REGION }}-docker.pkg.dev --quiet
+              
+              # Stop existing services gracefully
+              echo '⏹️  Stopping existing services...'
+              docker-compose -f secure-docker-setup/docker-compose.secure.yml down --remove-orphans 2>/dev/null || echo 'No existing bot services'
+              cd infra/caddy && docker-compose down 2>/dev/null || echo 'No existing Caddy service'
+              cd /opt/telegram-bot
+              
+              # Start Caddy proxy first
+              echo '🌐 Starting Caddy proxy...'
+              cd infra/caddy
+              docker-compose up -d
+              
+              # Wait for Caddy to be ready
+              sleep 5
+              
+              # Start bot application
+              echo '🤖 Starting bot application...'
+              cd /opt/telegram-bot
+              docker-compose -f secure-docker-setup/docker-compose.secure.yml pull
+              docker-compose -f secure-docker-setup/docker-compose.secure.yml up -d
+              
+              echo '✅ Deployment completed'
+            "
+
+  health-check:
+    name: 🏥 Health Check & Verification
+    runs-on: ubuntu-latest
+    needs: deploy-to-vm
+    
+    steps:
+      - name: 🔐 Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      - name: ☁️ Set up Google Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: 🏥 Comprehensive Health Check
+        run: |
+          echo "🔍 Running health checks on VM: ${{ env.VM_NAME }}"
+          
+          # Wait for services to fully start
+          sleep 30
+          
+          gcloud compute ssh ${{ env.VM_NAME }} \
+            --zone=${{ env.ZONE }} \
+            --project=${{ env.PROJECT_ID }} \
+            --command="
+              cd /opt/telegram-bot
+              
+              echo '🔍 Container Status:'
+              docker ps --format 'table {{.Names}}\t{{.Status}}\t{{.Ports}}' || echo 'Could not get container status'
+              
+              echo ''
+              echo '🔍 Health Checks:'
+              
+              # Test Caddy health
+              if timeout 10 curl -f http://localhost/health &>/dev/null; then
+                echo '✅ Caddy health: PASSED'
+              else
+                echo '❌ Caddy health: FAILED'
+                docker logs caddy-proxy --tail 5 2>/dev/null || echo 'Could not get Caddy logs'
+              fi
+              
+              # Test bot health
+              if timeout 10 curl -f http://localhost/health/bot &>/dev/null; then
+                echo '✅ Bot health: PASSED'
+              else
+                echo '❌ Bot health: FAILED'
+                docker logs ${{ env.SERVICE_NAME }} --tail 10 2>/dev/null || echo 'Could not get bot logs'
+              fi
+              
+              echo ''
+              echo '📊 Resource Usage:'
+              docker stats --no-stream --format 'table {{.Name}}\t{{.CPUPerc}}\t{{.MemUsage}}' 2>/dev/null || echo 'Could not get stats'
+              
+              echo ''
+              echo '📋 Recent Bot Logs:'
+              docker logs ${{ env.SERVICE_NAME }} --tail 5 2>/dev/null || echo 'Could not get recent logs'
+            "
+          
+          # External health check
+          echo ""
+          echo "🌐 External Health Check:"
+          if timeout 10 curl -f "http://${{ env.VM_IP }}/health" 2>/dev/null; then
+            echo "✅ External access: WORKING"
+            echo "🔗 Bot is accessible at: http://${{ env.VM_IP }}"
+          else
+            echo "⚠️ External access: Limited (may need firewall rules)"
+            echo "💡 To enable external access, run:"
+            echo "   gcloud compute firewall-rules create allow-telegram-bot-http --allow tcp:80,tcp:443 --source-ranges 0.0.0.0/0 --target-tags http-server"
+          fi
+
+      - name: 📊 Deployment Summary
+        run: |
+          echo "## 🎉 Deployment Summary" >> $GITHUB_STEP_SUMMARY
+          echo "- **Image**: ${{ needs.build-and-push.outputs.image_uri }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **VM**: ${{ env.VM_NAME }} (${{ env.VM_IP }})" >> $GITHUB_STEP_SUMMARY
+          echo "- **Project**: ${{ env.PROJECT_ID }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Region**: ${{ env.REGION }} / ${{ env.ZONE }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Repository**: ${{ env.AR_REPO }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Health Check**: http://${{ env.VM_IP }}/health" >> $GITHUB_STEP_SUMMARY
+          echo "- **Deployment Time**: $(date -u +'%Y-%m-%d %H:%M:%S UTC')" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### 🔗 Access Points" >> $GITHUB_STEP_SUMMARY
+          echo "- Main health: http://${{ env.VM_IP }}/health" >> $GITHUB_STEP_SUMMARY
+          echo "- Bot health: http://${{ env.VM_IP }}/health/bot" >> $GITHUB_STEP_SUMMARY
+          echo "- Caddy health: http://${{ env.VM_IP }}/health/caddy" >> $GITHUB_STEP_SUMMARY

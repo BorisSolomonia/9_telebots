@@ -1,0 +1,113 @@
+# Secure Docker Compose Configuration
+# This replaces insecure credential passing methods
+
+version: '3.9'
+
+services:
+  order-bot:
+    build: 
+      context: ..
+      dockerfile: secure-docker-setup/Dockerfile.secure
+    container_name: order-bot-secure
+    restart: unless-stopped
+    
+    # Secure environment configuration
+    env_file:
+      - .env  # Load from secure .env file
+    
+    # Alternative: Use Docker secrets (recommended for production)
+    # secrets:
+    #   - telegram_token
+    #   - openai_api_key
+    #   - google_credentials
+    
+    # Security settings
+    user: "1001:1001"  # Non-root user
+    read_only: true    # Read-only filesystem
+    
+    # Writable volumes for necessary data
+    tmpfs:
+      - /tmp
+    volumes:
+      - customer_data:/app/data
+      - ./logs:/app/logs:rw
+    
+    # Resource limits
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: '0.5'
+        reservations:
+          memory: 128M
+          cpus: '0.1'
+    
+    # Health check
+    healthcheck:
+      test: ["CMD", "python", "-c", "import requests; requests.get('http://localhost:8080/health', timeout=5)"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    
+    # Network security
+    networks:
+      - bot_network
+    
+    # No port exposure (bot doesn't need external access)
+    # Only expose if you add a health endpoint
+    ports:
+      - "8080:8080"  # Only for health checks
+    
+    # Logging configuration
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # Optional: Redis for caching (recommended for production)
+  redis:
+    image: redis:7-alpine
+    container_name: bot-redis
+    restart: unless-stopped
+    
+    command: redis-server --appendonly yes --requirepass ${REDIS_PASSWORD}
+    
+    volumes:
+      - redis_data:/data
+    
+    networks:
+      - bot_network
+    
+    # Security settings
+    user: "999:999"
+    read_only: true
+    tmpfs:
+      - /tmp
+    
+    deploy:
+      resources:
+        limits:
+          memory: 128M
+          cpus: '0.2'
+
+volumes:
+  customer_data:
+    driver: local
+  redis_data:
+    driver: local
+
+networks:
+  bot_network:
+    driver: bridge
+    internal: true  # No external network access except for bot
+
+# Docker secrets (for production)
+secrets:
+  telegram_token:
+    file: ./secrets/telegram_token.txt
+  openai_api_key:
+    file: ./secrets/openai_api_key.txt
+  google_credentials:
+    file: ./secrets/google_credentials.json

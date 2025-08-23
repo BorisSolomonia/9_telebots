@@ -1,0 +1,123 @@
+# Secure Multi-stage Dockerfile for Telegram Bot
+# Addresses security vulnerabilities in the existing setup
+
+# Build stage
+FROM python:3.11-slim as builder
+
+# Security: Update packages and install only necessary dependencies
+RUN apt-get update && apt-get install -y \
+    gcc \
+    g++ \
+    && rm -rf /var/lib/apt/lists/* \
+    && apt-get clean
+
+# Create non-root user for build
+RUN groupadd -r builder && useradd --no-log-init -r -g builder builder
+
+# Set working directory
+WORKDIR /build
+
+# Copy requirements first for better caching
+COPY requirements.txt .
+
+# Install Python dependencies
+RUN pip install --no-cache-dir --user -r requirements.txt
+
+# Production stage
+FROM python:3.11-slim as production
+
+# Security updates
+RUN apt-get update && apt-get upgrade -y \
+    && apt-get install -y --no-install-recommends \
+        curl \
+        ca-certificates \
+    && rm -rf /var/lib/apt/lists/* \
+    && apt-get clean
+
+# Create non-root user and group
+RUN groupadd -r botuser && useradd --no-log-init -r -g botuser -d /app -s /bin/bash botuser
+
+# Create application directory with proper permissions
+RUN mkdir -p /app/data /app/logs \
+    && chown -R botuser:botuser /app
+
+# Set working directory
+WORKDIR /app
+
+# Copy Python packages from builder stage
+COPY --from=builder /root/.local /home/botuser/.local
+
+# Add local Python packages to PATH
+ENV PATH=/home/botuser/.local/bin:$PATH
+
+# Copy application code
+COPY --chown=botuser:botuser improved_order_bot.py .
+COPY --chown=botuser:botuser config_template.py .
+
+# Copy any additional required files
+COPY --chown=botuser:botuser customers.json ./data/ 2>/dev/null || echo "customers.json not found, will be created"
+
+# Security: Remove write permissions where not needed
+RUN chmod 755 /app \
+    && chmod 644 improved_order_bot.py config_template.py \
+    && chmod 755 /app/data /app/logs
+
+# Switch to non-root user
+USER botuser
+
+# Environment variables for security
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1
+
+# Health check endpoint (optional)
+COPY --chown=botuser:botuser <<EOF /app/health_server.py
+#!/usr/bin/env python3
+"""Simple health check server."""
+import asyncio
+from aiohttp import web, web_runner
+import logging
+
+async def health_handler(request):
+    return web.json_response({"status": "healthy", "service": "telegram-bot"})
+
+async def create_health_server():
+    app = web.Application()
+    app.router.add_get("/health", health_handler)
+    
+    runner = web_runner.AppRunner(app)
+    await runner.setup()
+    
+    site = web.TCPSite(runner, "0.0.0.0", 8080)
+    await site.start()
+    
+    logging.info("Health server started on port 8080")
+
+if __name__ == "__main__":
+    asyncio.run(create_health_server())
+EOF
+
+# Make health server executable
+RUN chmod +x /app/health_server.py
+
+# Expose health check port
+EXPOSE 8080
+
+# Volume for persistent data
+VOLUME ["/app/data", "/app/logs"]
+
+# Security: Use exec form for better signal handling
+ENTRYPOINT ["python", "-u"]
+
+# Default command (can be overridden)
+CMD ["improved_order_bot.py"]
+
+# Metadata
+LABEL maintainer="telegram-bot-team" \
+      version="1.0.0" \
+      description="Secure Telegram Order Bot" \
+      security.scan="required"
+
+# Security scan instructions for CI/CD
+# RUN echo "Security scan with: docker run --rm -v /var/run/docker.sock:/var/run/docker.sock aquasec/trivy image telegram-bot:latest"
