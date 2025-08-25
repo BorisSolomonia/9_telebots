@@ -49,14 +49,21 @@ jobs:
           line="$(gcloud artifacts repositories list --project "${GCP_PROJECT_ID}" \
                   --filter='format=DOCKER' \
                   --format='value(name,location)' | head -n1 || true)"
+          echo "Found line: '$line'"
           if [[ -z "$line" ]]; then
             echo "❌ No DOCKER Artifact Registry found in project ${GCP_PROJECT_ID}."
             echo "Create one in Console → Artifact Registry → Repositories (format=DOCKER)."
             exit 1
           fi
-          REPO="$(awk '{print $1}' <<<"$line")"
-          REGION="$(awk '{print $2}' <<<"$line")"
-          echo "repo=$REPO"   >> "$GITHUB_OUTPUT"
+          REPO="$(echo "$line" | awk '{print $1}')"
+          REGION="$(echo "$line" | awk '{print $2}')"
+          echo "Parsed REPO: '$REPO'"
+          echo "Parsed REGION: '$REGION'"
+          if [[ -z "$REGION" ]]; then
+            echo "❌ Failed to parse region from: '$line'"
+            exit 1
+          fi
+          echo "repo=$REPO" >> "$GITHUB_OUTPUT"
           echo "region=$REGION" >> "$GITHUB_OUTPUT"
 
       - name: 🐳 Configure docker for AR
