@@ -4,11 +4,14 @@ on:
   push:
     branches: [ main, master ]
     paths:
+      - 'bot.py'
+      - 'order_bot.py'
       - 'improved_order_bot.py'
       - 'config_template.py'
       - 'secure-docker-setup/**'
       - 'infra/**'
       - 'requirements.txt'
+      - '.env.template'
   workflow_dispatch: {}
 
 defaults:
