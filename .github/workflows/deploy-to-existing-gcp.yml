@@ -7,7 +7,7 @@ on:
 
 defaults:
   run:
-    shell: bash -euo pipefail
+    shell: bash
 
 env:
   # All values come from Actions SECRETS only (no hardcoded constants)
