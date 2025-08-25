@@ -62,7 +62,9 @@ jobs:
       - name: 🐳 Configure docker for AR
         run: |
           set -x
-          gcloud auth configure-docker ${{ steps.ar.outputs.region }}-docker.pkg.dev --quiet
+          AR_HOST="${{ steps.ar.outputs.region }}-docker.pkg.dev"
+          echo "Configuring Docker for: $AR_HOST"
+          gcloud auth configure-docker "$AR_HOST" --quiet
 
       - name: 🏗️ Build & Push image
         id: meta
