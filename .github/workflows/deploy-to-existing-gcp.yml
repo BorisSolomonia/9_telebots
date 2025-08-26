@@ -46,36 +46,59 @@ jobs:
         run: |
           set -x
           
-          # Get CSV output and skip header line
-          csv_output="$(gcloud artifacts repositories list --project "${GCP_PROJECT_ID}" \
-                       --filter='format=DOCKER' \
-                       --format='csv(name,location)' | tail -n +2 || true)"
-          echo "CSV output (no header): '$csv_output'"
+          # Use value format which works more reliably
+          echo "=== Getting repository details ==="
+          repos_output="$(gcloud artifacts repositories list --project "${GCP_PROJECT_ID}" \
+                         --filter='format=DOCKER' \
+                         --format='value(name,location)' || true)"
+          echo "Repos output: '$repos_output'"
           
           # Find first repo with non-empty location
-          while IFS= read -r line; do
-            if [[ -z "$line" ]]; then
-              continue
-            fi
+          REPO=""
+          REGION=""
+          
+          while IFS=$'\t' read -r repo_name repo_location; do
+            echo "Processing: repo='$repo_name', location='$repo_location'"
             
-            REPO="$(echo "$line" | cut -d',' -f1)"
-            REGION="$(echo "$line" | cut -d',' -f2)"
-            
-            echo "Checking: REPO='$REPO', REGION='$REGION'"
-            
-            # Skip repos with empty location
-            if [[ -n "$REGION" ]]; then
-              echo "✅ Found valid repo: $REPO in $REGION"
+            if [[ -n "$repo_name" && -n "$repo_location" ]]; then
+              REPO="$repo_name"
+              REGION="$repo_location"
+              echo "✅ Selected: $REPO in $REGION"
               break
             else
-              echo "⚠️  Skipping $REPO (no location)"
+              echo "⚠️  Skipping incomplete entry: '$repo_name' / '$repo_location'"
             fi
-          done <<< "$csv_output"
+          done <<< "$repos_output"
+          
+          # Fallback: if value format didn't work, try to parse from table format
+          if [[ -z "$REGION" || -z "$REPO" ]]; then
+            echo "=== Fallback: trying table format ==="
+            table_output="$(gcloud artifacts repositories list --project "${GCP_PROJECT_ID}" \
+                           --filter='format=DOCKER' \
+                           --format='table[no-heading](name,location)' || true)"
+            echo "Table output: '$table_output'"
+            
+            while read -r line; do
+              if [[ -z "$line" ]]; then continue; fi
+              
+              # Split by whitespace
+              repo_name="$(echo "$line" | awk '{print $1}')"
+              repo_location="$(echo "$line" | awk '{print $2}')"
+              
+              echo "Table processing: repo='$repo_name', location='$repo_location'"
+              
+              if [[ -n "$repo_name" && -n "$repo_location" && "$repo_location" != "LOCATION" ]]; then
+                REPO="$repo_name"
+                REGION="$repo_location"
+                echo "✅ Selected from table: $REPO in $REGION"
+                break
+              fi
+            done <<< "$table_output"
+          fi
           
           if [[ -z "$REGION" || -z "$REPO" ]]; then
             echo "❌ No DOCKER Artifact Registry with valid location found."
-            echo "Available repos:"
-            echo "$csv_output"
+            echo "Please check your Artifact Registry repositories in GCP Console."
             exit 1
           fi
           
