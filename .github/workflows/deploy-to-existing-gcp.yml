@@ -450,6 +450,23 @@ jobs:
               ( cd infra/caddy && dco down || true )
             fi
 
+            echo "🔧 Fix .env file location and add missing vars"
+            if [ -f ".env" ] && [ ! -f "secure-docker-setup/.env" ]; then
+              echo "Copying .env to secure-docker-setup/"
+              cp .env secure-docker-setup/.env
+              
+              # Add REDIS_PASSWORD if not present
+              if ! grep -q "REDIS_PASSWORD" secure-docker-setup/.env; then
+                echo "REDIS_PASSWORD=secure_redis_pass_$(openssl rand -hex 12)" >> secure-docker-setup/.env
+                echo "Added REDIS_PASSWORD to .env"
+              fi
+            fi
+
+            echo "📝 Fix compose file and patch image"
+            # Remove obsolete version field
+            sed -i "/^version:/d" secure-docker-setup/docker-compose.secure.yml || true
+            
+            # Update image
             echo "📝 Patch compose to use ${IMAGE_URI}"
             sed -i "s|^\s*build:.*|image: ${IMAGE_URI}|g" secure-docker-setup/docker-compose.secure.yml || true
             sed -i "s|^\s*context:.*||g" secure-docker-setup/docker-compose.secure.yml || true
