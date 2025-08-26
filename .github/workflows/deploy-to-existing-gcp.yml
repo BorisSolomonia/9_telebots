@@ -239,6 +239,22 @@ jobs:
 
           echo "image_uri=${IMAGE_URI}" >> "$GITHUB_OUTPUT"
           echo "ar_host=${AR_HOST}"     >> "$GITHUB_OUTPUT"
+          
+          echo "🔍 Verifying outputs were set:"
+          echo "IMAGE_URI output: ${IMAGE_URI}"
+          echo "AR_HOST output: ${AR_HOST}"
+          
+          # Verify outputs are not empty
+          if [[ -z "${IMAGE_URI}" ]]; then
+            echo "❌ ERROR: IMAGE_URI is empty - cannot set job output!"
+            exit 1
+          fi
+          if [[ -z "${AR_HOST}" ]]; then
+            echo "❌ ERROR: AR_HOST is empty - cannot set job output!"
+            exit 1
+          fi
+          
+          echo "✅ Build completed successfully with outputs set"
 
           echo "::group::Local images"
           docker images --digests | head -n 50
@@ -252,8 +268,16 @@ jobs:
       - name: 🔍 Debug job outputs
         run: |
           echo "🔍 Outputs from build-and-push job:"
-          echo "image_uri: ${{ needs.build-and-push.outputs.image_uri }}"
-          echo "ar_host: ${{ needs.build-and-push.outputs.ar_host }}"
+          echo "image_uri: '${{ needs.build-and-push.outputs.image_uri }}'"
+          echo "ar_host: '${{ needs.build-and-push.outputs.ar_host }}'"
+          echo "Expected image_uri should contain: us-central1-docker.pkg.dev/nine-tones-bots-2025-468320/tasty-ar/app1"
+          
+          # Check if outputs are empty
+          if [[ -z "${{ needs.build-and-push.outputs.image_uri }}" ]]; then
+            echo "❌ ERROR: image_uri output is empty!"
+            echo "Build job may have failed to set outputs correctly."
+            exit 1
+          fi
       - name: 📥 Checkout
         uses: actions/checkout@v4
 
