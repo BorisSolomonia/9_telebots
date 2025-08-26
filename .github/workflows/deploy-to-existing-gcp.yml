@@ -209,6 +209,20 @@ jobs:
           set -x
           echo "token=$(gcloud auth print-access-token)" >> "$GITHUB_OUTPUT"
 
+      - name: 📁 Ensure target directory exists
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ env.VM_HOST }}
+          username: ${{ env.VM_SSH_USER }}
+          key: ${{ secrets.VM_SSH_KEY }}
+          script: |
+            set -euo pipefail
+            APP_DIR="/opt/${{ env.APP_NAME }}"
+            echo "Creating directory: $APP_DIR"
+            sudo mkdir -p "$APP_DIR"
+            sudo chown "$USER:$USER" "$APP_DIR"
+            ls -la "$APP_DIR" || true
+
       - name: 📤 Copy repo files + .env to VM
         uses: appleboy/scp-action@v0.1.7
         with:
@@ -237,7 +251,8 @@ jobs:
             dco() { docker compose "$@" || docker-compose "$@"; }
 
             APP_DIR="/opt/${APP_NAME}"
-            mkdir -p "$APP_DIR"
+            sudo mkdir -p "$APP_DIR"
+            sudo chown "$USER:$USER" "$APP_DIR"
             cd "$APP_DIR"
 
             echo "🔐 Docker login to ${AR_HOST} using CI token"
