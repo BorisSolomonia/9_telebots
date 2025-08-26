@@ -332,13 +332,9 @@ jobs:
             dco() { docker compose "$@" || docker-compose "$@"; }
 
             echo "🔍 Debug environment variables:"
-            echo "APP_NAME: '$APP_NAME'"
-            echo "AR_HOST: '$AR_HOST'"
-            echo "IMAGE_URI: '$IMAGE_URI'"
-            echo "AR_REPO_NAME: '$AR_REPO_NAME'"
-            echo "AR_REGION: '$AR_REGION'"
-            echo "GCP_PROJECT_ID: '$GCP_PROJECT_ID'"
-            echo "GITHUB_SHA: '$GITHUB_SHA'"
+            echo "APP_NAME: $APP_NAME"
+            echo "AR_HOST: $AR_HOST"
+            echo "IMAGE_URI: $IMAGE_URI"
             
             echo "🔍 Expected AR connection details:"
             echo "AR Repository: ${AR_REPO_NAME} in region ${AR_REGION}"
