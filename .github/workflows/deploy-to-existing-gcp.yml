@@ -508,7 +508,8 @@ jobs:
             echo "🧹 Stop previous services (idempotent)"
             dco -f secure-docker-setup/docker-compose.secure.yml down --remove-orphans || true
             if [ -d "infra/caddy" ]; then
-              ( cd infra/caddy && dco down || true )
+              echo "Stopping Caddy services (if configured)..."
+              ( cd infra/caddy && if grep -q "^[[:space:]]*[^#].*:" compose.yml 2>/dev/null; then dco down || true; else echo "Caddy compose empty - nothing to stop"; fi )
             fi
             
             # Update image
@@ -564,13 +565,23 @@ jobs:
             echo "🔐 Set perms"
             chmod 600 .env 2>/dev/null || true
 
-            echo "🌐 Start/Reload Caddy (if present)"
+            echo "🌐 Start/Reload Caddy (if present and configured)"
             if [ -d "infra/caddy" ]; then
               cd infra/caddy
-              dco up -d
-              sleep 4
-              dco ps || true
+              
+              # Check if compose file has any uncommented services
+              if grep -q "^[[:space:]]*[^#].*:" compose.yml 2>/dev/null; then
+                echo "✅ Caddy compose file has active services"
+                dco up -d
+                sleep 4
+                dco ps || true
+              else
+                echo "⚠️  Caddy compose file is empty or fully commented out - skipping Caddy"
+              fi
+              
               cd "$APP_DIR"
+            else
+              echo "ℹ️  No infra/caddy directory found - skipping Caddy"
             fi
 
             echo "🤖 Deploy app"
