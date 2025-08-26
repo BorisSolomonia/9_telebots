@@ -15,6 +15,8 @@ env:
   GCP_PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
   VM_HOST: ${{ secrets.VM_HOST }}
   VM_SSH_USER: ${{ secrets.VM_SSH_USER }}
+  AR_REPO_NAME: ${{ secrets.AR_REPO_NAME }}
+  AR_REGION: ${{ secrets.AR_REGION }}
 
 jobs:
   build-and-push:
@@ -46,12 +48,23 @@ jobs:
         run: |
           set -x
           
-          echo "=== Getting repository details ==="
+          echo "=== Looking for ${AR_REPO_NAME} repository in ${AR_REGION} ==="
           
-          # Simple approach: use JSON format for reliable parsing
-          repos_json="$(gcloud artifacts repositories list --project "${GCP_PROJECT_ID}" \
-                       --filter='format=DOCKER' \
-                       --format='json' || true)"
+          # Check if AR_REPO_NAME exists in AR_REGION
+          if gcloud artifacts repositories describe "${AR_REPO_NAME}" \
+               --location="${AR_REGION}" \
+               --project="${GCP_PROJECT_ID}" >/dev/null 2>&1; then
+            echo "✅ Found ${AR_REPO_NAME} in ${AR_REGION}"
+            echo "repo=${AR_REPO_NAME}" >> "$GITHUB_OUTPUT"
+            echo "region=${AR_REGION}" >> "$GITHUB_OUTPUT"
+          else
+            echo "❌ ${AR_REPO_NAME} not found in ${AR_REGION}"
+            echo "=== Fallback: Getting all repository details ==="
+            
+            # Simple approach: use JSON format for reliable parsing
+            repos_json="$(gcloud artifacts repositories list --project "${GCP_PROJECT_ID}" \
+                         --filter='format=DOCKER' \
+                         --format='json' || true)"
           
           echo "Repos JSON output:"
           echo "$repos_json"
@@ -119,16 +132,17 @@ jobs:
             fi
           fi
           
-          if [[ -z "$REGION" || -z "$REPO" ]]; then
-            echo "❌ No DOCKER Artifact Registry found."
-            echo "=== Debug: Listing all repositories ==="
-            gcloud artifacts repositories list --project "${GCP_PROJECT_ID}" || true
-            exit 1
+            if [[ -z "$REGION" || -z "$REPO" ]]; then
+              echo "❌ No DOCKER Artifact Registry found."
+              echo "=== Debug: Listing all repositories ==="
+              gcloud artifacts repositories list --project "${GCP_PROJECT_ID}" || true
+              exit 1
+            fi
+            
+            echo "✅ Final selection: $REPO in $REGION"
+            echo "repo=$REPO" >> "$GITHUB_OUTPUT"
+            echo "region=$REGION" >> "$GITHUB_OUTPUT"
           fi
-          
-          echo "✅ Final selection: $REPO in $REGION"
-          echo "repo=$REPO" >> "$GITHUB_OUTPUT"
-          echo "region=$REGION" >> "$GITHUB_OUTPUT"
 
       - name: 🐳 Configure docker for AR
         run: |
