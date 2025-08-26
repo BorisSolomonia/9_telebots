@@ -64,13 +64,26 @@ jobs:
             # Use jq if available, otherwise fallback to basic parsing
             if command -v jq >/dev/null 2>&1; then
               echo "Using jq for JSON parsing"
-              REPO="$(echo "$repos_json" | jq -r '.[0].name // empty' | sed 's|.*/||')"
-              REGION="$(echo "$repos_json" | jq -r '.[0].location // empty')"
+              # Extract name and location from the full path in the JSON
+              full_name="$(echo "$repos_json" | jq -r '.[0].name // empty')"
+              echo "Full name from JSON: '$full_name'"
+              
+              if [[ -n "$full_name" && "$full_name" != "null" ]]; then
+                # Parse: projects/PROJECT/locations/REGION/repositories/REPO
+                REPO="$(echo "$full_name" | sed 's|.*/repositories/||')"
+                REGION="$(echo "$full_name" | sed 's|.*/locations/||' | sed 's|/repositories/.*||')"
+              fi
             else
               echo "Using basic JSON parsing (no jq)"
-              # Basic parsing without jq - extract first occurrence
-              REPO="$(echo "$repos_json" | grep -o '"name": *"[^"]*"' | head -1 | sed 's/.*"name": *"\([^"]*\)".*/\1/' | sed 's|.*/||')"
-              REGION="$(echo "$repos_json" | grep -o '"location": *"[^"]*"' | head -1 | sed 's/.*"location": *"\([^"]*\)".*/\1/')"
+              # Basic parsing without jq - extract name field
+              full_name="$(echo "$repos_json" | grep -o '"name": *"[^"]*"' | head -1 | sed 's/.*"name": *"\([^"]*\)".*/\1/')"
+              echo "Full name from basic parsing: '$full_name'"
+              
+              if [[ -n "$full_name" ]]; then
+                # Parse: projects/PROJECT/locations/REGION/repositories/REPO
+                REPO="$(echo "$full_name" | sed 's|.*/repositories/||')"
+                REGION="$(echo "$full_name" | sed 's|.*/locations/||' | sed 's|/repositories/.*||')"
+              fi
             fi
           fi
           
