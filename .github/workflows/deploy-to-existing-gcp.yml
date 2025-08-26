@@ -505,10 +505,6 @@ jobs:
             
             echo "Compose file size after version removal:" $(wc -l secure-docker-setup/docker-compose.secure.yml 2>/dev/null || echo "0")
 
-            echo "🕸️ Ensure networks"
-            docker network create web 2>/dev/null || true
-            docker network create bot_internal --internal 2>/dev/null || true
-
             echo "🧹 Stop previous services (idempotent)"
             dco -f secure-docker-setup/docker-compose.secure.yml down --remove-orphans || true
             if [ -d "infra/caddy" ]; then
@@ -557,6 +553,13 @@ jobs:
               ls -la secure-docker-setup/
               exit 1
             fi
+
+            echo "🕸️ Ensure networks (after compose file is ready)"
+            # Create networks that match the compose file
+            docker network create web 2>/dev/null || true
+            docker network create bot_network --internal 2>/dev/null || true
+            # Legacy networks for backward compatibility  
+            docker network create bot_internal --internal 2>/dev/null || true
 
             echo "🔐 Set perms"
             chmod 600 .env 2>/dev/null || true
