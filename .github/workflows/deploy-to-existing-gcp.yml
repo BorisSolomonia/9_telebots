@@ -206,6 +206,23 @@ jobs:
           echo "Tag: ${GITHUB_SHA}"
           echo "Short tag: ${GITHUB_SHA:0:7}"
           echo "Expected full path: ${AR_HOST}/${GCP_PROJECT_ID}/${AR_REPO_NAME}/${APP_NAME}:${GITHUB_SHA}"
+          
+          # Validate AR path construction
+          EXPECTED_AR_BASE="us-central1-docker.pkg.dev/nine-tones-bots-2025-468320/tasty-ar"
+          ACTUAL_AR_BASE="${AR_HOST}/${GCP_PROJECT_ID}/${AR_REPO_NAME}"
+          echo "🔍 AR Path validation:"
+          echo "Expected: ${EXPECTED_AR_BASE}"
+          echo "Actual:   ${ACTUAL_AR_BASE}"
+          
+          if [[ "${ACTUAL_AR_BASE}" != "${EXPECTED_AR_BASE}" ]]; then
+            echo "❌ ERROR: AR path mismatch!"
+            echo "Check your GitHub Secrets:"
+            echo "- GCP_PROJECT_ID should be: nine-tones-bots-2025-468320"
+            echo "- AR_REGION should be: us-central1" 
+            echo "- AR_REPO_NAME should be: tasty-ar"
+            exit 1
+          fi
+          echo "✅ AR path matches expected format"
 
           echo "Building ${IMAGE_URI}"
           docker build \
@@ -301,11 +318,15 @@ jobs:
           AR_HOST:   ${{ needs.build-and-push.outputs.ar_host }}
           IMAGE_URI: ${{ needs.build-and-push.outputs.image_uri }}
           APP_NAME:  ${{ env.APP_NAME }}
+          AR_REPO_NAME: ${{ env.AR_REPO_NAME }}
+          AR_REGION: ${{ env.AR_REGION }}
+          GCP_PROJECT_ID: ${{ env.GCP_PROJECT_ID }}
+          GITHUB_SHA: ${{ github.sha }}
         with:
           host:     ${{ env.VM_HOST }}
           username: ${{ env.VM_SSH_USER }}
           key:      ${{ secrets.VM_SSH_KEY }}
-          envs:     AR_TOKEN,AR_HOST,IMAGE_URI,APP_NAME
+          envs:     AR_TOKEN,AR_HOST,IMAGE_URI,APP_NAME,AR_REPO_NAME,AR_REGION,GCP_PROJECT_ID,GITHUB_SHA
           script: |
             set -euo pipefail
             dco() { docker compose "$@" || docker-compose "$@"; }
@@ -316,9 +337,9 @@ jobs:
             echo "IMAGE_URI: $IMAGE_URI"
             
             echo "🔍 Expected AR connection details:"
-            echo "AR Repository: ${{ env.AR_REPO_NAME }} in region ${{ env.AR_REGION }}"
-            echo "Expected AR Host: ${{ env.AR_REGION }}-docker.pkg.dev"
-            echo "Full expected path: ${{ env.AR_REGION }}-docker.pkg.dev/${{ env.GCP_PROJECT_ID }}/${{ env.AR_REPO_NAME }}/${{ env.APP_NAME }}:${GITHUB_SHA:0:7}"
+            echo "AR Repository: ${AR_REPO_NAME} in region ${AR_REGION}"
+            echo "Expected AR Host: ${AR_REGION}-docker.pkg.dev"
+            echo "Full expected path: ${AR_REGION}-docker.pkg.dev/${GCP_PROJECT_ID}/${AR_REPO_NAME}/${APP_NAME}:${GITHUB_SHA:0:7}"
 
             if [[ -z "$IMAGE_URI" ]]; then
               echo "❌ ERROR: IMAGE_URI is empty. Build job failed - deployment MUST NOT proceed!"
@@ -336,8 +357,8 @@ jobs:
             
             echo "✅ AR Connection Details:"
             echo "AR Host: ${AR_HOST}"
-            echo "AR Repository: ${{ env.AR_REPO_NAME }}"
-            echo "AR Region: ${{ env.AR_REGION }}"
+            echo "AR Repository: ${AR_REPO_NAME}"
+            echo "AR Region: ${AR_REGION}"
             echo "Image to deploy: ${IMAGE_URI}"
 
             echo "🕸️ Ensure networks"
