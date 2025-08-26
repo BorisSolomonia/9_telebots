@@ -296,7 +296,8 @@ jobs:
             echo "IMAGE_URI: $IMAGE_URI"
 
             if [[ -z "$IMAGE_URI" ]]; then
-              echo "❌ ERROR: IMAGE_URI is empty. Build job may have failed."
+              echo "❌ ERROR: IMAGE_URI is empty. Build job failed - deployment MUST NOT proceed!"
+              echo "Fix the build job before attempting deployment."
               exit 1
             fi
 
