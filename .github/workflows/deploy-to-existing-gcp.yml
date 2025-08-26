@@ -218,7 +218,8 @@ jobs:
           overwrite: true
           strip_components: 0
           source: "infra/,secure-docker-setup/,.env"
-          target: /opt/${{ env.APP_NAME }}/
+          target: "/opt/${{ env.APP_NAME }}/"
+          debug: true
 
       - name: 🐳 Deploy (compose up -d)
         uses: appleboy/ssh-action@v1.0.3
