@@ -200,6 +200,12 @@ jobs:
           echo "AR_HOST: ${AR_HOST}"
           echo "IMAGE_BASE: ${IMAGE_BASE}"
           echo "IMAGE_URI: ${IMAGE_URI}"
+          
+          echo "🔍 This will create image with:"
+          echo "Name: ${APP_NAME}"
+          echo "Tag: ${GITHUB_SHA}"
+          echo "Short tag: ${GITHUB_SHA:0:7}"
+          echo "Expected full path: ${AR_HOST}/${GCP_PROJECT_ID}/${AR_REPO_NAME}/${APP_NAME}:${GITHUB_SHA}"
 
           echo "Building ${IMAGE_URI}"
           docker build \
@@ -308,6 +314,11 @@ jobs:
             echo "APP_NAME: $APP_NAME"
             echo "AR_HOST: $AR_HOST"
             echo "IMAGE_URI: $IMAGE_URI"
+            
+            echo "🔍 Expected AR connection details:"
+            echo "AR Repository: ${{ env.AR_REPO_NAME }} in region ${{ env.AR_REGION }}"
+            echo "Expected AR Host: ${{ env.AR_REGION }}-docker.pkg.dev"
+            echo "Full expected path: ${{ env.AR_REGION }}-docker.pkg.dev/${{ env.GCP_PROJECT_ID }}/${{ env.AR_REPO_NAME }}/${{ env.APP_NAME }}:${GITHUB_SHA:0:7}"
 
             if [[ -z "$IMAGE_URI" ]]; then
               echo "❌ ERROR: IMAGE_URI is empty. Build job failed - deployment MUST NOT proceed!"
@@ -322,6 +333,12 @@ jobs:
 
             echo "🔐 Docker login to ${AR_HOST} using CI token"
             echo "${AR_TOKEN}" | docker login -u oauth2accesstoken --password-stdin "${AR_HOST}"
+            
+            echo "✅ AR Connection Details:"
+            echo "AR Host: ${AR_HOST}"
+            echo "AR Repository: ${{ env.AR_REPO_NAME }}"
+            echo "AR Region: ${{ env.AR_REGION }}"
+            echo "Image to deploy: ${IMAGE_URI}"
 
             echo "🕸️ Ensure networks"
             docker network create web 2>/dev/null || true
