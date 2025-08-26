@@ -1,3 +1,4 @@
+
 name: 🚀 Deploy (no hardcoded vars; secrets-only)
 
 on:
@@ -45,107 +46,52 @@ jobs:
         id: ar
         run: |
           set -x
-          
-          echo "=== Getting repository details ==="
-          
-          # Simple approach: use JSON format for reliable parsing
-          repos_json="$(gcloud artifacts repositories list --project "${GCP_PROJECT_ID}" \
-                       --filter='format=DOCKER' \
-                       --format='json' || true)"
-          
-          echo "Repos JSON output:"
-          echo "$repos_json"
-          
-          # Extract first repository with valid name and location
-          REPO=""
-          REGION=""
-          
+          repos_json="$(gcloud artifacts repositories list --project "${GCP_PROJECT_ID}" --filter='format=DOCKER' --format='json' || true)"
+          REPO=""; REGION=""
           if [[ -n "$repos_json" && "$repos_json" != "[]" ]]; then
-            # Use jq if available, otherwise fallback to basic parsing
             if command -v jq >/dev/null 2>&1; then
-              echo "Using jq for JSON parsing"
-              # Extract name and location from the full path in the JSON
               full_name="$(echo "$repos_json" | jq -r '.[0].name // empty')"
-              echo "Full name from JSON: '$full_name'"
-              
-              if [[ -n "$full_name" && "$full_name" != "null" ]]; then
-                # Parse: projects/PROJECT/locations/REGION/repositories/REPO
-                REPO="$(echo "$full_name" | sed 's|.*/repositories/||')"
-                REGION="$(echo "$full_name" | sed 's|.*/locations/||' | sed 's|/repositories/.*||')"
-              fi
             else
-              echo "Using basic JSON parsing (no jq)"
-              # Basic parsing without jq - extract name field
               full_name="$(echo "$repos_json" | grep -o '"name": *"[^"]*"' | head -1 | sed 's/.*"name": *"\([^"]*\)".*/\1/')"
-              echo "Full name from basic parsing: '$full_name'"
-              
-              if [[ -n "$full_name" ]]; then
-                # Parse: projects/PROJECT/locations/REGION/repositories/REPO
-                REPO="$(echo "$full_name" | sed 's|.*/repositories/||')"
-                REGION="$(echo "$full_name" | sed 's|.*/locations/||' | sed 's|/repositories/.*||')"
-              fi
+            fi
+            if [[ -n "$full_name" && "$full_name" != "null" ]]; then
+              REPO="$(echo "$full_name"  | sed 's|.*/repositories/||')"
+              REGION="$(echo "$full_name"| sed 's|.*/locations/||' | sed 's|/repositories/.*||')"
             fi
           fi
-          
-          echo "Parsed: REPO='$REPO', REGION='$REGION'"
-          
-          # Fallback: try simple list format if JSON parsing failed
           if [[ -z "$REGION" || -z "$REPO" ]]; then
-            echo "=== Fallback: trying simple list format ==="
-            
-            list_output="$(gcloud artifacts repositories list --project "${GCP_PROJECT_ID}" \
-                          --filter='format=DOCKER' \
-                          --format='value(name,location)' || true)"
-            echo "List output: '$list_output'"
-            
+            list_output="$(gcloud artifacts repositories list --project "${GCP_PROJECT_ID}" --filter='format=DOCKER' --format='value(name,location)' || true)"
             if [[ -n "$list_output" ]]; then
-              # Process each line - gcloud value format uses spaces, not tabs
               while read -r line; do
-                if [[ -z "$line" ]]; then continue; fi
-                
-                echo "Processing line: '$line'"
-                # Extract name and location from space-separated line
+                [[ -z "$line" ]] && continue
                 repo_full="$(echo "$line" | awk '{print $1}')"
                 repo_location="$(echo "$line" | awk '{print $2}')"
-                
                 if [[ -n "$repo_full" && -n "$repo_location" ]]; then
-                  # Extract just the repo name from full path
                   REPO="$(basename "$repo_full")"
                   REGION="$repo_location"
-                  echo "✅ Found: $REPO in $REGION"
                   break
                 fi
               done <<< "$list_output"
             fi
           fi
-          
           if [[ -z "$REGION" || -z "$REPO" ]]; then
             echo "❌ No DOCKER Artifact Registry found."
-            echo "=== Debug: Listing all repositories ==="
             gcloud artifacts repositories list --project "${GCP_PROJECT_ID}" || true
             exit 1
           fi
-          
-          echo "✅ Final selection: $REPO in $REGION"
-          echo "repo=$REPO" >> "$GITHUB_OUTPUT"
+          echo "repo=$REPO"   >> "$GITHUB_OUTPUT"
           echo "region=$REGION" >> "$GITHUB_OUTPUT"
 
       - name: 🐳 Configure docker for AR
         run: |
           set -x
           AR_HOST="${{ steps.ar.outputs.region }}-docker.pkg.dev"
-          echo "Configuring Docker for: $AR_HOST"
           gcloud auth configure-docker "$AR_HOST" --quiet
 
       - name: 📁 Get customers.json from Secret Manager
         run: |
           set -x
-          echo "Retrieving customers.json from Secret Manager"
-          gcloud secrets versions access latest \
-            --project "${GCP_PROJECT_ID}" \
-            --secret "customers-json" > customers.json
-          
-          echo "customers.json retrieved successfully"
+          gcloud secrets versions access latest --project "${GCP_PROJECT_ID}" --secret "customers-json" > customers.json
           ls -la customers.json || echo "Warning: customers.json not found"
 
       - name: 🏗️ Build & Push image
@@ -156,7 +102,6 @@ jobs:
           IMAGE_BASE="${AR_HOST}/${GCP_PROJECT_ID}/${{ steps.ar.outputs.repo }}/${APP_NAME}"
           IMAGE_URI="${IMAGE_BASE}:${GITHUB_SHA}"
 
-          echo "Building ${IMAGE_URI}"
           docker build \
             -f secure-docker-setup/Dockerfile.secure \
             -t "${IMAGE_URI}" \
@@ -198,16 +143,11 @@ jobs:
           gcloud secrets versions access latest \
             --project "${GCP_PROJECT_ID}" \
             --secret "${APP_NAME}-env" > .env
-
-          echo "::group::.env (first lines)"
           head -n 20 .env || true
-          echo "::endgroup::"
 
       - name: 🔑 Get short-lived AR token
         id: token
-        run: |
-          set -x
-          echo "token=$(gcloud auth print-access-token)" >> "$GITHUB_OUTPUT"
+        run: echo "token=$(gcloud auth print-access-token)" >> "$GITHUB_OUTPUT"
 
       - name: 📁 Ensure target directory exists
         uses: appleboy/ssh-action@v1.0.3
@@ -215,10 +155,11 @@ jobs:
           host: ${{ env.VM_HOST }}
           username: ${{ env.VM_SSH_USER }}
           key: ${{ secrets.VM_SSH_KEY }}
+          # pass APP_NAME so the remote shell can use it
+          envs: APP_NAME
           script: |
             set -euo pipefail
-            APP_DIR="/opt/${{ env.APP_NAME }}"
-            echo "Creating directory: $APP_DIR"
+            APP_DIR="/opt/${APP_NAME}"
             sudo mkdir -p "$APP_DIR"
             sudo chown "$USER:$USER" "$APP_DIR"
             ls -la "$APP_DIR" || true
@@ -246,21 +187,23 @@ jobs:
           host:     ${{ env.VM_HOST }}
           username: ${{ env.VM_SSH_USER }}
           key:      ${{ secrets.VM_SSH_KEY }}
+          # 👇 THIS is the crucial line: forward env vars to the remote VM
+          envs: APP_NAME,AR_HOST,IMAGE_URI,AR_TOKEN
           script: |
             set -euo pipefail
             dco() { docker compose "$@" || docker-compose "$@"; }
 
             echo "🔍 Debug environment variables:"
-            echo "APP_NAME: $APP_NAME"
-            echo "AR_HOST: $AR_HOST"
-            echo "IMAGE_URI: $IMAGE_URI"
+            echo "APP_NAME: ${APP_NAME}"
+            echo "AR_HOST: ${AR_HOST}"
+            echo "IMAGE_URI: ${IMAGE_URI}"
 
-            if [[ -z "$IMAGE_URI" ]]; then
+            if [[ -z "${IMAGE_URI}" ]]; then
               echo "❌ ERROR: IMAGE_URI is empty. Build job may have failed."
               exit 1
             fi
 
-            APP_DIR="/opt/$APP_NAME"
+            APP_DIR="/opt/${APP_NAME}"
             sudo mkdir -p "$APP_DIR"
             sudo chown "$USER:$USER" "$APP_DIR"
             cd "$APP_DIR"
@@ -280,7 +223,7 @@ jobs:
 
             echo "📝 Patch compose to use ${IMAGE_URI}"
             sed -i "s|^\s*build:.*|image: ${IMAGE_URI}|g" secure-docker-setup/docker-compose.secure.yml || true
-            sed -i "s|^\s*context:.*||g" secure-docker-setup/docker-compose.secure.yml || true
+            sed -i "s|^\s*context:.*||g"  secure-docker-setup/docker-compose.secure.yml || true
             sed -i "s|^\s*dockerfile:.*||g" secure-docker-setup/docker-compose.secure.yml || true
 
             echo "🔐 Set perms"
@@ -327,6 +270,8 @@ jobs:
           host:     ${{ env.VM_HOST }}
           username: ${{ env.VM_SSH_USER }}
           key:      ${{ secrets.VM_SSH_KEY }}
+          # APP_NAME is used in the remote script, so forward it:
+          envs: APP_NAME
           script: |
             set -euo pipefail
             echo "🔍 docker ps"
@@ -334,9 +279,354 @@ jobs:
 
             echo
             echo "📋 Recent app logs (tail 200)"
-            docker logs ${APP_NAME} --tail 200 || true
+            docker logs "${APP_NAME}" --tail 200 || true
 
             echo
             echo "📋 Recent caddy logs (tail 120)"
-            docker logs caddy  --tail 120 || true
-            docker logs caddy-proxy --tail 120 || true
+            docker logs caddy        --tail 120 || true
+            docker logs caddy-proxy  --tail 120 || true
+
+
+
+# name: 🚀 Deploy (no hardcoded vars; secrets-only)
+
+# on:
+#   push:
+#     branches: [ main, master ]
+#   workflow_dispatch: {}
+
+# defaults:
+#   run:
+#     shell: bash
+
+# env:
+#   # All values come from Actions SECRETS only (no hardcoded constants)
+#   APP_NAME: ${{ secrets.APP_NAME }}
+#   GCP_PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
+#   VM_HOST: ${{ secrets.VM_HOST }}
+#   VM_SSH_USER: ${{ secrets.VM_SSH_USER }}
+
+# jobs:
+#   build-and-push:
+#     name: 🏗️ Build & Push
+#     runs-on: ubuntu-latest
+#     outputs:
+#       image_uri: ${{ steps.meta.outputs.image_uri }}
+#       ar_host:   ${{ steps.meta.outputs.ar_host }}
+#     steps:
+#       - name: 📥 Checkout
+#         uses: actions/checkout@v4
+
+#       - name: 🔐 Auth GCP
+#         uses: google-github-actions/auth@v2
+#         with:
+#           credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+#       - name: ☁️ Setup gcloud
+#         uses: google-github-actions/setup-gcloud@v2
+
+#       - name: 🔎 Print versions
+#         run: |
+#           set -x
+#           gcloud --version
+#           docker version
+
+#       - name: 🔎 Discover Artifact Registry (DOCKER)
+#         id: ar
+#         run: |
+#           set -x
+          
+#           echo "=== Getting repository details ==="
+          
+#           # Simple approach: use JSON format for reliable parsing
+#           repos_json="$(gcloud artifacts repositories list --project "${GCP_PROJECT_ID}" \
+#                        --filter='format=DOCKER' \
+#                        --format='json' || true)"
+          
+#           echo "Repos JSON output:"
+#           echo "$repos_json"
+          
+#           # Extract first repository with valid name and location
+#           REPO=""
+#           REGION=""
+          
+#           if [[ -n "$repos_json" && "$repos_json" != "[]" ]]; then
+#             # Use jq if available, otherwise fallback to basic parsing
+#             if command -v jq >/dev/null 2>&1; then
+#               echo "Using jq for JSON parsing"
+#               # Extract name and location from the full path in the JSON
+#               full_name="$(echo "$repos_json" | jq -r '.[0].name // empty')"
+#               echo "Full name from JSON: '$full_name'"
+              
+#               if [[ -n "$full_name" && "$full_name" != "null" ]]; then
+#                 # Parse: projects/PROJECT/locations/REGION/repositories/REPO
+#                 REPO="$(echo "$full_name" | sed 's|.*/repositories/||')"
+#                 REGION="$(echo "$full_name" | sed 's|.*/locations/||' | sed 's|/repositories/.*||')"
+#               fi
+#             else
+#               echo "Using basic JSON parsing (no jq)"
+#               # Basic parsing without jq - extract name field
+#               full_name="$(echo "$repos_json" | grep -o '"name": *"[^"]*"' | head -1 | sed 's/.*"name": *"\([^"]*\)".*/\1/')"
+#               echo "Full name from basic parsing: '$full_name'"
+              
+#               if [[ -n "$full_name" ]]; then
+#                 # Parse: projects/PROJECT/locations/REGION/repositories/REPO
+#                 REPO="$(echo "$full_name" | sed 's|.*/repositories/||')"
+#                 REGION="$(echo "$full_name" | sed 's|.*/locations/||' | sed 's|/repositories/.*||')"
+#               fi
+#             fi
+#           fi
+          
+#           echo "Parsed: REPO='$REPO', REGION='$REGION'"
+          
+#           # Fallback: try simple list format if JSON parsing failed
+#           if [[ -z "$REGION" || -z "$REPO" ]]; then
+#             echo "=== Fallback: trying simple list format ==="
+            
+#             list_output="$(gcloud artifacts repositories list --project "${GCP_PROJECT_ID}" \
+#                           --filter='format=DOCKER' \
+#                           --format='value(name,location)' || true)"
+#             echo "List output: '$list_output'"
+            
+#             if [[ -n "$list_output" ]]; then
+#               # Process each line - gcloud value format uses spaces, not tabs
+#               while read -r line; do
+#                 if [[ -z "$line" ]]; then continue; fi
+                
+#                 echo "Processing line: '$line'"
+#                 # Extract name and location from space-separated line
+#                 repo_full="$(echo "$line" | awk '{print $1}')"
+#                 repo_location="$(echo "$line" | awk '{print $2}')"
+                
+#                 if [[ -n "$repo_full" && -n "$repo_location" ]]; then
+#                   # Extract just the repo name from full path
+#                   REPO="$(basename "$repo_full")"
+#                   REGION="$repo_location"
+#                   echo "✅ Found: $REPO in $REGION"
+#                   break
+#                 fi
+#               done <<< "$list_output"
+#             fi
+#           fi
+          
+#           if [[ -z "$REGION" || -z "$REPO" ]]; then
+#             echo "❌ No DOCKER Artifact Registry found."
+#             echo "=== Debug: Listing all repositories ==="
+#             gcloud artifacts repositories list --project "${GCP_PROJECT_ID}" || true
+#             exit 1
+#           fi
+          
+#           echo "✅ Final selection: $REPO in $REGION"
+#           echo "repo=$REPO" >> "$GITHUB_OUTPUT"
+#           echo "region=$REGION" >> "$GITHUB_OUTPUT"
+
+#       - name: 🐳 Configure docker for AR
+#         run: |
+#           set -x
+#           AR_HOST="${{ steps.ar.outputs.region }}-docker.pkg.dev"
+#           echo "Configuring Docker for: $AR_HOST"
+#           gcloud auth configure-docker "$AR_HOST" --quiet
+
+#       - name: 📁 Get customers.json from Secret Manager
+#         run: |
+#           set -x
+#           echo "Retrieving customers.json from Secret Manager"
+#           gcloud secrets versions access latest \
+#             --project "${GCP_PROJECT_ID}" \
+#             --secret "customers-json" > customers.json
+          
+#           echo "customers.json retrieved successfully"
+#           ls -la customers.json || echo "Warning: customers.json not found"
+
+#       - name: 🏗️ Build & Push image
+#         id: meta
+#         run: |
+#           set -x
+#           AR_HOST="${{ steps.ar.outputs.region }}-docker.pkg.dev"
+#           IMAGE_BASE="${AR_HOST}/${GCP_PROJECT_ID}/${{ steps.ar.outputs.repo }}/${APP_NAME}"
+#           IMAGE_URI="${IMAGE_BASE}:${GITHUB_SHA}"
+
+#           echo "Building ${IMAGE_URI}"
+#           docker build \
+#             -f secure-docker-setup/Dockerfile.secure \
+#             -t "${IMAGE_URI}" \
+#             -t "${IMAGE_BASE}:latest" \
+#             --label "org.opencontainers.image.source=${{ github.repository }}" \
+#             --label "org.opencontainers.image.revision=${GITHUB_SHA}" \
+#             --label "org.opencontainers.image.created=$(date -u +'%Y-%m-%dT%H:%M:%SZ')" \
+#             .
+
+#           docker push "${IMAGE_URI}"
+#           docker push "${IMAGE_BASE}:latest"
+
+#           echo "image_uri=${IMAGE_URI}" >> "$GITHUB_OUTPUT"
+#           echo "ar_host=${AR_HOST}"     >> "$GITHUB_OUTPUT"
+
+#           echo "::group::Local images"
+#           docker images --digests | head -n 50
+#           echo "::endgroup::"
+
+#   deploy:
+#     name: 🚀 Deploy on VM
+#     runs-on: ubuntu-latest
+#     needs: build-and-push
+#     steps:
+#       - name: 📥 Checkout
+#         uses: actions/checkout@v4
+
+#       - name: 🔐 Auth GCP (for Secret Manager + AR token)
+#         uses: google-github-actions/auth@v2
+#         with:
+#           credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+#       - name: ☁️ Setup gcloud
+#         uses: google-github-actions/setup-gcloud@v2
+
+#       - name: 🧾 Build .env from Secret Manager (<APP>-env)
+#         run: |
+#           set -x
+#           gcloud secrets versions access latest \
+#             --project "${GCP_PROJECT_ID}" \
+#             --secret "${APP_NAME}-env" > .env
+
+#           echo "::group::.env (first lines)"
+#           head -n 20 .env || true
+#           echo "::endgroup::"
+
+#       - name: 🔑 Get short-lived AR token
+#         id: token
+#         run: |
+#           set -x
+#           echo "token=$(gcloud auth print-access-token)" >> "$GITHUB_OUTPUT"
+
+#       - name: 📁 Ensure target directory exists
+#         uses: appleboy/ssh-action@v1.0.3
+#         with:
+#           host: ${{ env.VM_HOST }}
+#           username: ${{ env.VM_SSH_USER }}
+#           key: ${{ secrets.VM_SSH_KEY }}
+#           script: |
+#             set -euo pipefail
+#             APP_DIR="/opt/${{ env.APP_NAME }}"
+#             echo "Creating directory: $APP_DIR"
+#             sudo mkdir -p "$APP_DIR"
+#             sudo chown "$USER:$USER" "$APP_DIR"
+#             ls -la "$APP_DIR" || true
+
+#       - name: 📤 Copy repo files + .env to VM
+#         uses: appleboy/scp-action@v0.1.7
+#         with:
+#           host: ${{ env.VM_HOST }}
+#           username: ${{ env.VM_SSH_USER }}
+#           key: ${{ secrets.VM_SSH_KEY }}
+#           overwrite: true
+#           strip_components: 0
+#           source: "infra/,secure-docker-setup/,.env"
+#           target: "/opt/${{ env.APP_NAME }}/"
+#           debug: true
+
+#       - name: 🐳 Deploy (compose up -d)
+#         uses: appleboy/ssh-action@v1.0.3
+#         env:
+#           AR_TOKEN:  ${{ steps.token.outputs.token }}
+#           AR_HOST:   ${{ needs.build-and-push.outputs.ar_host }}
+#           IMAGE_URI: ${{ needs.build-and-push.outputs.image_uri }}
+#           APP_NAME:  ${{ env.APP_NAME }}
+#         with:
+#           host:     ${{ env.VM_HOST }}
+#           username: ${{ env.VM_SSH_USER }}
+#           key:      ${{ secrets.VM_SSH_KEY }}
+#           script: |
+#             set -euo pipefail
+#             dco() { docker compose "$@" || docker-compose "$@"; }
+
+#             echo "🔍 Debug environment variables:"
+#             echo "APP_NAME: $APP_NAME"
+#             echo "AR_HOST: $AR_HOST"
+#             echo "IMAGE_URI: $IMAGE_URI"
+
+#             if [[ -z "$IMAGE_URI" ]]; then
+#               echo "❌ ERROR: IMAGE_URI is empty. Build job may have failed."
+#               exit 1
+#             fi
+
+#             APP_DIR="/opt/$APP_NAME"
+#             sudo mkdir -p "$APP_DIR"
+#             sudo chown "$USER:$USER" "$APP_DIR"
+#             cd "$APP_DIR"
+
+#             echo "🔐 Docker login to ${AR_HOST} using CI token"
+#             echo "${AR_TOKEN}" | docker login -u oauth2accesstoken --password-stdin "${AR_HOST}"
+
+#             echo "🕸️ Ensure networks"
+#             docker network create web 2>/dev/null || true
+#             docker network create bot_internal --internal 2>/dev/null || true
+
+#             echo "🧹 Stop previous services (idempotent)"
+#             dco -f secure-docker-setup/docker-compose.secure.yml down --remove-orphans || true
+#             if [ -d "infra/caddy" ]; then
+#               ( cd infra/caddy && dco down || true )
+#             fi
+
+#             echo "📝 Patch compose to use ${IMAGE_URI}"
+#             sed -i "s|^\s*build:.*|image: ${IMAGE_URI}|g" secure-docker-setup/docker-compose.secure.yml || true
+#             sed -i "s|^\s*context:.*||g" secure-docker-setup/docker-compose.secure.yml || true
+#             sed -i "s|^\s*dockerfile:.*||g" secure-docker-setup/docker-compose.secure.yml || true
+
+#             echo "🔐 Set perms"
+#             chmod 600 .env 2>/dev/null || true
+
+#             echo "🌐 Start/Reload Caddy (if present)"
+#             if [ -d "infra/caddy" ]; then
+#               cd infra/caddy
+#               dco up -d
+#               sleep 4
+#               dco ps || true
+#               cd "$APP_DIR"
+#             fi
+
+#             echo "🤖 Deploy app"
+#             dco -f secure-docker-setup/docker-compose.secure.yml pull
+#             dco -f secure-docker-setup/docker-compose.secure.yml up -d
+
+#             echo "🔎 Containers:"
+#             docker ps --format 'table {{.Names}}\t{{.Status}}\t{{.Ports}}'
+
+#   health:
+#     name: 🏥 Health & Logs
+#     runs-on: ubuntu-latest
+#     needs: [deploy]
+#     steps:
+#       - name: 🔐 Auth GCP (for curl timeout on runner only)
+#         uses: google-github-actions/auth@v2
+#         with:
+#           credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+#       - name: 🌐 External health check
+#         run: |
+#           set -x
+#           if timeout 12 curl -fsS "http://${{ env.VM_HOST }}/health" >/dev/null; then
+#             echo "✅ External /health OK"
+#           else
+#             echo "❌ External /health failed"
+#           fi
+
+#       - name: 🔎 VM container status & logs
+#         uses: appleboy/ssh-action@v1.0.3
+#         with:
+#           host:     ${{ env.VM_HOST }}
+#           username: ${{ env.VM_SSH_USER }}
+#           key:      ${{ secrets.VM_SSH_KEY }}
+#           script: |
+#             set -euo pipefail
+#             echo "🔍 docker ps"
+#             docker ps --format 'table {{.Names}}\t{{.Status}}\t{{.Ports}}' || true
+
+#             echo
+#             echo "📋 Recent app logs (tail 200)"
+#             docker logs ${APP_NAME} --tail 200 || true
+
+#             echo
+#             echo "📋 Recent caddy logs (tail 120)"
+#             docker logs caddy  --tail 120 || true
+#             docker logs caddy-proxy --tail 120 || true
