@@ -400,7 +400,25 @@ jobs:
           envs:     AR_TOKEN,APP_NAME,AR_REPO_NAME,AR_REGION,GCP_PROJECT_ID,GITHUB_SHA
           script: |
             set -euo pipefail
-            dco() { docker compose "$@" || docker-compose "$@"; }
+            
+            # Check available docker compose commands
+            echo "🔍 Checking docker compose availability:"
+            if command -v docker &> /dev/null; then
+              echo "✅ docker available"
+              docker --version
+            fi
+            if docker compose version &> /dev/null; then
+              echo "✅ docker compose available"
+              docker compose version
+              dco() { docker compose "$@"; }
+            elif command -v docker-compose &> /dev/null; then
+              echo "✅ docker-compose available"  
+              docker-compose --version
+              dco() { docker-compose "$@"; }
+            else
+              echo "❌ Neither docker compose nor docker-compose found!"
+              exit 1
+            fi
 
             echo "🔍 Debug environment variables:"
             echo "APP_NAME: $APP_NAME"
@@ -440,17 +458,7 @@ jobs:
             echo "AR Region: ${AR_REGION}"
             echo "Image to deploy: ${IMAGE_URI}"
 
-            echo "🕸️ Ensure networks"
-            docker network create web 2>/dev/null || true
-            docker network create bot_internal --internal 2>/dev/null || true
-
-            echo "🧹 Stop previous services (idempotent)"
-            dco -f secure-docker-setup/docker-compose.secure.yml down --remove-orphans || true
-            if [ -d "infra/caddy" ]; then
-              ( cd infra/caddy && dco down || true )
-            fi
-
-            echo "🔧 Fix .env file location and add missing vars"
+            echo "🔧 Fix .env file location and add missing vars FIRST"
             if [ -f ".env" ] && [ ! -f "secure-docker-setup/.env" ]; then
               echo "Copying .env to secure-docker-setup/"
               cp .env secure-docker-setup/.env
@@ -465,6 +473,16 @@ jobs:
             echo "📝 Fix compose file and patch image"
             # Remove obsolete version field
             sed -i "/^version:/d" secure-docker-setup/docker-compose.secure.yml || true
+
+            echo "🕸️ Ensure networks"
+            docker network create web 2>/dev/null || true
+            docker network create bot_internal --internal 2>/dev/null || true
+
+            echo "🧹 Stop previous services (idempotent)"
+            dco -f secure-docker-setup/docker-compose.secure.yml down --remove-orphans || true
+            if [ -d "infra/caddy" ]; then
+              ( cd infra/caddy && dco down || true )
+            fi
             
             # Update image
             echo "📝 Patch compose to use ${IMAGE_URI}"
