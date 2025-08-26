@@ -45,41 +45,37 @@ jobs:
         id: ar
         run: |
           set -x
-          # List all repositories to debug format
-          echo "=== All repositories ==="
-          gcloud artifacts repositories list --project "${GCP_PROJECT_ID}" || true
           
-          # Try different format approaches
-          echo "=== Trying format: csv ==="
-          gcloud artifacts repositories list --project "${GCP_PROJECT_ID}" \
-                  --filter='format=DOCKER' \
-                  --format='csv(name,location)' | head -n2 || true
+          # Get CSV output and skip header line
+          csv_output="$(gcloud artifacts repositories list --project "${GCP_PROJECT_ID}" \
+                       --filter='format=DOCKER' \
+                       --format='csv(name,location)' | tail -n +2 || true)"
+          echo "CSV output (no header): '$csv_output'"
           
-          echo "=== Trying format: table ==="
-          gcloud artifacts repositories list --project "${GCP_PROJECT_ID}" \
-                  --filter='format=DOCKER' \
-                  --format='table(name,location)' | head -n3 || true
-          
-          # Get first DOCKER repo with proper parsing
-          output="$(gcloud artifacts repositories list --project "${GCP_PROJECT_ID}" \
-                   --filter='format=DOCKER' \
-                   --format='csv(name,location)' --no-headers | head -n1 || true)"
-          echo "CSV output: '$output'"
-          
-          if [[ -z "$output" ]]; then
-            echo "❌ No DOCKER Artifact Registry found in project ${GCP_PROJECT_ID}."
-            exit 1
-          fi
-          
-          # Parse CSV format: name,location
-          REPO="$(echo "$output" | cut -d',' -f1)"
-          REGION="$(echo "$output" | cut -d',' -f2)"
-          
-          echo "Parsed REPO: '$REPO'"
-          echo "Parsed REGION: '$REGION'"
+          # Find first repo with non-empty location
+          while IFS= read -r line; do
+            if [[ -z "$line" ]]; then
+              continue
+            fi
+            
+            REPO="$(echo "$line" | cut -d',' -f1)"
+            REGION="$(echo "$line" | cut -d',' -f2)"
+            
+            echo "Checking: REPO='$REPO', REGION='$REGION'"
+            
+            # Skip repos with empty location
+            if [[ -n "$REGION" ]]; then
+              echo "✅ Found valid repo: $REPO in $REGION"
+              break
+            else
+              echo "⚠️  Skipping $REPO (no location)"
+            fi
+          done <<< "$csv_output"
           
           if [[ -z "$REGION" || -z "$REPO" ]]; then
-            echo "❌ Failed to parse repo/region from: '$output'"
+            echo "❌ No DOCKER Artifact Registry with valid location found."
+            echo "Available repos:"
+            echo "$csv_output"
             exit 1
           fi
           
