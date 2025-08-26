@@ -137,6 +137,17 @@ jobs:
           echo "Configuring Docker for: $AR_HOST"
           gcloud auth configure-docker "$AR_HOST" --quiet
 
+      - name: 📁 Get customers.json from Secret Manager
+        run: |
+          set -x
+          echo "Retrieving customers.json from Secret Manager"
+          gcloud secrets versions access latest \
+            --project "${GCP_PROJECT_ID}" \
+            --secret "customers-json" > customers.json
+          
+          echo "customers.json retrieved successfully"
+          ls -la customers.json || echo "Warning: customers.json not found"
+
       - name: 🏗️ Build & Push image
         id: meta
         run: |

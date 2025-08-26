@@ -54,8 +54,8 @@ ENV PATH=/home/botuser/.local/bin:$PATH
 COPY --chown=botuser:botuser improved_order_bot.py .
 COPY --chown=botuser:botuser config_template.py .
 
-# Copy any additional required files
-COPY --chown=botuser:botuser customers.json ./data/ 2>/dev/null || echo "customers.json not found, will be created"
+# Copy customers.json (retrieved from Secret Manager before build)
+COPY --chown=botuser:botuser customers.json ./data/
 
 # Security: Remove write permissions where not needed
 RUN chmod 755 /app \
