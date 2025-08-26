@@ -459,20 +459,51 @@ jobs:
             echo "Image to deploy: ${IMAGE_URI}"
 
             echo "🔧 Fix .env file location and add missing vars FIRST"
-            if [ -f ".env" ] && [ ! -f "secure-docker-setup/.env" ]; then
-              echo "Copying .env to secure-docker-setup/"
-              cp .env secure-docker-setup/.env
+            echo "Debug: We're in directory: $(pwd)"
+            echo "Debug: Checking file existence in current directory..."
+            ls -la . | head -20 || true
+            echo "Debug: Checking secure-docker-setup directory..."
+            ls -la secure-docker-setup/ | head -10 || true
+            
+            # The .env file should be here from SCP action
+            if [ -f ".env" ]; then
+              echo "✅ .env found in current directory"
+              echo "First few lines of .env:"
+              head -5 .env || true
               
-              # Add REDIS_PASSWORD if not present
-              if ! grep -q "REDIS_PASSWORD" secure-docker-setup/.env; then
-                echo "REDIS_PASSWORD=secure_redis_pass_$(openssl rand -hex 12)" >> secure-docker-setup/.env
-                echo "Added REDIS_PASSWORD to .env"
+              if [ ! -f "secure-docker-setup/.env" ]; then
+                echo "Copying .env to secure-docker-setup/"
+                cp .env secure-docker-setup/.env
+                
+                # Add REDIS_PASSWORD if not present
+                if ! grep -q "REDIS_PASSWORD" secure-docker-setup/.env; then
+                  echo "REDIS_PASSWORD=secure_redis_pass_$(openssl rand -hex 12)" >> secure-docker-setup/.env
+                  echo "Added REDIS_PASSWORD to .env"
+                fi
+                echo "✅ .env copied and configured"
+                echo "Final .env file size:" $(wc -l secure-docker-setup/.env)
+              else
+                echo "✅ secure-docker-setup/.env already exists"
               fi
+            else
+              echo "❌ .env not found in current directory: $(pwd)"
+              echo "Available files (first 30):"
+              ls -la . | head -30
+              echo "Looking for any .env files recursively:"
+              find . -name "*.env" -type f 2>/dev/null | head -10 || echo "No .env files found"
             fi
 
             echo "📝 Fix compose file and patch image"
+            echo "Before compose file modifications:"
+            ls -la secure-docker-setup/docker-compose.secure.yml || echo "Compose file not found"
+            
+            # Check file contents before modification
+            echo "Compose file size before:" $(wc -l secure-docker-setup/docker-compose.secure.yml 2>/dev/null || echo "0")
+            
             # Remove obsolete version field
             sed -i "/^version:/d" secure-docker-setup/docker-compose.secure.yml || true
+            
+            echo "Compose file size after version removal:" $(wc -l secure-docker-setup/docker-compose.secure.yml 2>/dev/null || echo "0")
 
             echo "🕸️ Ensure networks"
             docker network create web 2>/dev/null || true
@@ -486,9 +517,32 @@ jobs:
             
             # Update image
             echo "📝 Patch compose to use ${IMAGE_URI}"
-            sed -i "s|^\s*build:.*|image: ${IMAGE_URI}|g" secure-docker-setup/docker-compose.secure.yml || true
-            sed -i "s|^\s*context:.*||g" secure-docker-setup/docker-compose.secure.yml || true
-            sed -i "s|^\s*dockerfile:.*||g" secure-docker-setup/docker-compose.secure.yml || true
+            echo "Running image replacements..."
+            
+            # Check if compose file still exists and has content
+            if [ -f "secure-docker-setup/docker-compose.secure.yml" ] && [ -s "secure-docker-setup/docker-compose.secure.yml" ]; then
+              echo "Compose file exists and has content"
+              
+              # Show what we're replacing
+              echo "Looking for 'build:' lines to replace:"
+              grep -n "build:" secure-docker-setup/docker-compose.secure.yml || echo "No build: lines found"
+              
+              # Apply replacements
+              sed -i "s|^\s*build:.*|image: ${IMAGE_URI}|g" secure-docker-setup/docker-compose.secure.yml || true
+              sed -i "s|^\s*context:.*||g" secure-docker-setup/docker-compose.secure.yml || true  
+              sed -i "s|^\s*dockerfile:.*||g" secure-docker-setup/docker-compose.secure.yml || true
+              
+              echo "Final compose file size:" $(wc -l secure-docker-setup/docker-compose.secure.yml 2>/dev/null || echo "0")
+              
+              # Show final result
+              echo "After replacements, checking for 'image:' lines:"
+              grep -n "image:" secure-docker-setup/docker-compose.secure.yml || echo "No image: lines found"
+              
+            else
+              echo "❌ Compose file is missing or empty after modifications!"
+              ls -la secure-docker-setup/
+              exit 1
+            fi
 
             echo "🔐 Set perms"
             chmod 600 .env 2>/dev/null || true
