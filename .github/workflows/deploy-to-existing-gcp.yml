@@ -234,50 +234,99 @@ jobs:
             --label "org.opencontainers.image.created=$(date -u +'%Y-%m-%dT%H:%M:%SZ')" \
             .
 
+          echo "🔍 Pre-push variable check:"
+          echo "IMAGE_URI before push: '${IMAGE_URI}'"
+          echo "IMAGE_BASE before push: '${IMAGE_BASE}'"
+          echo "AR_HOST before push: '${AR_HOST}'"
+          
+          echo "🚀 Starting docker push..."
           docker push "${IMAGE_URI}"
+          echo "✅ Pushed ${IMAGE_URI}"
+          
           docker push "${IMAGE_BASE}:latest"
-
-          echo "image_uri=${IMAGE_URI}" >> "$GITHUB_OUTPUT"
-          echo "ar_host=${AR_HOST}"     >> "$GITHUB_OUTPUT"
+          echo "✅ Pushed ${IMAGE_BASE}:latest"
           
-          echo "🔍 Verifying outputs were set:"
-          echo "IMAGE_URI output: ${IMAGE_URI}"
-          echo "AR_HOST output: ${AR_HOST}"
+          echo "🔍 Post-push variable check:"
+          echo "IMAGE_URI after push: '${IMAGE_URI}'"
+          echo "AR_HOST after push: '${AR_HOST}'"
           
-          # Verify outputs are not empty
+          # Verify outputs are not empty BEFORE setting them
           if [[ -z "${IMAGE_URI}" ]]; then
-            echo "❌ ERROR: IMAGE_URI is empty - cannot set job output!"
+            echo "❌ CRITICAL: IMAGE_URI is empty before setting output!"
+            echo "This means variable was lost during execution."
             exit 1
           fi
           if [[ -z "${AR_HOST}" ]]; then
-            echo "❌ ERROR: AR_HOST is empty - cannot set job output!"
+            echo "❌ CRITICAL: AR_HOST is empty before setting output!"
+            echo "This means variable was lost during execution."
             exit 1
           fi
           
-          echo "✅ Build completed successfully with outputs set"
+          echo "🔍 About to set job outputs..."
+          echo "GITHUB_OUTPUT file: ${GITHUB_OUTPUT}"
+          echo "Current working directory: $(pwd)"
+          
+          echo "Setting image_uri=${IMAGE_URI}"
+          echo "image_uri=${IMAGE_URI}" >> "$GITHUB_OUTPUT"
+          echo "✅ Wrote image_uri to output"
+          
+          echo "Setting ar_host=${AR_HOST}"
+          echo "ar_host=${AR_HOST}" >> "$GITHUB_OUTPUT"
+          echo "✅ Wrote ar_host to output"
+          
+          echo "🔍 Verifying GITHUB_OUTPUT file contents:"
+          if [[ -f "$GITHUB_OUTPUT" ]]; then
+            echo "GITHUB_OUTPUT exists, contents:"
+            cat "$GITHUB_OUTPUT" | tail -10
+          else
+            echo "❌ GITHUB_OUTPUT file doesn't exist!"
+          fi
+          
+          echo "✅ Build and output setting completed successfully"
 
           echo "::group::Local images"
           docker images --digests | head -n 50
           echo "::endgroup::"
+
+      - name: 🔍 Final Step Output Verification
+        run: |
+          echo "🔍 Verifying step outputs are available:"
+          echo "steps.meta.outputs.image_uri: '${{ steps.meta.outputs.image_uri }}'"
+          echo "steps.meta.outputs.ar_host: '${{ steps.meta.outputs.ar_host }}'"
+          
+          if [[ -z "${{ steps.meta.outputs.image_uri }}" ]]; then
+            echo "❌ CRITICAL: Step output image_uri is empty!"
+            echo "Job outputs will be empty!"
+            exit 1
+          fi
+          
+          if [[ -z "${{ steps.meta.outputs.ar_host }}" ]]; then
+            echo "❌ CRITICAL: Step output ar_host is empty!"  
+            echo "Job outputs will be empty!"
+            exit 1
+          fi
+          
+          echo "✅ Step outputs are properly set and will be available to dependent jobs"
 
   deploy:
     name: 🚀 Deploy on VM
     runs-on: ubuntu-latest
     needs: build-and-push
     steps:
-      - name: 🔍 Debug job outputs
+      - name: 🔍 Verify build job success
         run: |
-          echo "🔍 Outputs from build-and-push job:"
-          echo "image_uri: '${{ needs.build-and-push.outputs.image_uri }}'"
-          echo "ar_host: '${{ needs.build-and-push.outputs.ar_host }}'"
-          echo "Expected image_uri should contain: us-central1-docker.pkg.dev/nine-tones-bots-2025-468320/tasty-ar/app1"
+          echo "🔍 Build job verification:"
+          echo "Build job status: ${{ needs.build-and-push.result }}"
           
-          # Check if outputs are empty
-          if [[ -z "${{ needs.build-and-push.outputs.image_uri }}" ]]; then
-            echo "❌ ERROR: image_uri output is empty!"
-            echo "Build job may have failed to set outputs correctly."
+          if [[ "${{ needs.build-and-push.result }}" != "success" ]]; then
+            echo "❌ ERROR: Build job did not complete successfully!"
+            echo "Status: ${{ needs.build-and-push.result }}"
+            echo "Cannot proceed with deployment."
             exit 1
           fi
+          
+          echo "✅ Build job completed successfully"
+          echo "🔍 Will construct IMAGE_URI directly from secrets to bypass GitHub's output filtering"
       - name: 📥 Checkout
         uses: actions/checkout@v4
 
@@ -339,8 +388,6 @@ jobs:
         uses: appleboy/ssh-action@v1.0.3
         env:
           AR_TOKEN:  ${{ steps.token.outputs.token }}
-          AR_HOST:   ${{ needs.build-and-push.outputs.ar_host }}
-          IMAGE_URI: ${{ needs.build-and-push.outputs.image_uri }}
           APP_NAME:  ${{ env.APP_NAME }}
           AR_REPO_NAME: ${{ env.AR_REPO_NAME }}
           AR_REGION: ${{ env.AR_REGION }}
@@ -350,26 +397,34 @@ jobs:
           host:     ${{ env.VM_HOST }}
           username: ${{ env.VM_SSH_USER }}
           key:      ${{ secrets.VM_SSH_KEY }}
-          envs:     AR_TOKEN,AR_HOST,IMAGE_URI,APP_NAME,AR_REPO_NAME,AR_REGION,GCP_PROJECT_ID,GITHUB_SHA
+          envs:     AR_TOKEN,APP_NAME,AR_REPO_NAME,AR_REGION,GCP_PROJECT_ID,GITHUB_SHA
           script: |
             set -euo pipefail
             dco() { docker compose "$@" || docker-compose "$@"; }
 
             echo "🔍 Debug environment variables:"
             echo "APP_NAME: $APP_NAME"
+            echo "AR_REPO_NAME: $AR_REPO_NAME"
+            echo "AR_REGION: $AR_REGION"  
+            echo "GCP_PROJECT_ID: $GCP_PROJECT_ID"
+            echo "GITHUB_SHA: $GITHUB_SHA"
+            
+            # Construct AR_HOST and IMAGE_URI directly (bypass GitHub's secret filtering)
+            AR_HOST="${AR_REGION}-docker.pkg.dev"
+            IMAGE_URI="${AR_HOST}/${GCP_PROJECT_ID}/${AR_REPO_NAME}/${APP_NAME}:${GITHUB_SHA}"
+            
+            echo "🔍 Constructed values:"
             echo "AR_HOST: $AR_HOST"
             echo "IMAGE_URI: $IMAGE_URI"
             
-            echo "🔍 Expected AR connection details:"
-            echo "AR Repository: ${AR_REPO_NAME} in region ${AR_REGION}"
-            echo "Expected AR Host: ${AR_REGION}-docker.pkg.dev"
-            echo "Full expected path: ${AR_REGION}-docker.pkg.dev/${GCP_PROJECT_ID}/${AR_REPO_NAME}/${APP_NAME}:${GITHUB_SHA:0:7}"
-
-            if [[ -z "$IMAGE_URI" ]]; then
-              echo "❌ ERROR: IMAGE_URI is empty. Build job failed - deployment MUST NOT proceed!"
-              echo "Fix the build job before attempting deployment."
+            # Validate construction
+            if [[ -z "$AR_HOST" ]] || [[ -z "$IMAGE_URI" ]]; then
+              echo "❌ ERROR: Failed to construct AR_HOST or IMAGE_URI!"
+              echo "Check that all required environment variables are set."
               exit 1
             fi
+            
+            echo "✅ Successfully constructed deployment values"
 
             APP_DIR="/opt/$APP_NAME"
             sudo mkdir -p "$APP_DIR"
