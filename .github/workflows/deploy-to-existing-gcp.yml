@@ -612,10 +612,13 @@ jobs:
 
       - name: 🔎 VM container status & logs
         uses: appleboy/ssh-action@v1.0.3
+        env:
+          APP_NAME: ${{ env.APP_NAME }}
         with:
           host:     ${{ env.VM_HOST }}
           username: ${{ env.VM_SSH_USER }}
           key:      ${{ secrets.VM_SSH_KEY }}
+          envs:     APP_NAME
           script: |
             set -euo pipefail
             echo "🔍 docker ps"
@@ -623,7 +626,8 @@ jobs:
 
             echo
             echo "📋 Recent app logs (tail 200)"
-            docker logs ${APP_NAME} --tail 200 || true
+            # Use the actual container name from the compose file
+            docker logs order-bot-secure --tail 200 || docker logs ${APP_NAME} --tail 200 || true
 
             echo
             echo "📋 Recent caddy logs (tail 120)"
