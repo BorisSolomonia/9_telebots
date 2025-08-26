@@ -212,15 +212,12 @@ jobs:
       - name: 📤 Copy repo files + .env to VM
         uses: appleboy/scp-action@v0.1.7
         with:
-          host:     ${{ env.VM_HOST }}
+          host: ${{ env.VM_HOST }}
           username: ${{ env.VM_SSH_USER }}
-          key:      ${{ secrets.VM_SSH_KEY }}
+          key: ${{ secrets.VM_SSH_KEY }}
           overwrite: true
           strip_components: 0
-          source: |
-            infra/
-            secure-docker-setup/
-            .env
+          source: "infra/,secure-docker-setup/,.env"
           target: /opt/${{ env.APP_NAME }}/
 
       - name: 🐳 Deploy (compose up -d)
