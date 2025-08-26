@@ -46,62 +46,74 @@ jobs:
         run: |
           set -x
           
-          # Use value format which works more reliably
           echo "=== Getting repository details ==="
-          repos_output="$(gcloud artifacts repositories list --project "${GCP_PROJECT_ID}" \
-                         --filter='format=DOCKER' \
-                         --format='value(name,location)' || true)"
-          echo "Repos output: '$repos_output'"
           
-          # Find first repo with non-empty location
+          # Simple approach: use JSON format for reliable parsing
+          repos_json="$(gcloud artifacts repositories list --project "${GCP_PROJECT_ID}" \
+                       --filter='format=DOCKER' \
+                       --format='json' || true)"
+          
+          echo "Repos JSON output:"
+          echo "$repos_json"
+          
+          # Extract first repository with valid name and location
           REPO=""
           REGION=""
           
-          while IFS=$'\t' read -r repo_name repo_location; do
-            echo "Processing: repo='$repo_name', location='$repo_location'"
-            
-            if [[ -n "$repo_name" && -n "$repo_location" ]]; then
-              REPO="$repo_name"
-              REGION="$repo_location"
-              echo "✅ Selected: $REPO in $REGION"
-              break
+          if [[ -n "$repos_json" && "$repos_json" != "[]" ]]; then
+            # Use jq if available, otherwise fallback to basic parsing
+            if command -v jq >/dev/null 2>&1; then
+              echo "Using jq for JSON parsing"
+              REPO="$(echo "$repos_json" | jq -r '.[0].name // empty' | sed 's|.*/||')"
+              REGION="$(echo "$repos_json" | jq -r '.[0].location // empty')"
             else
-              echo "⚠️  Skipping incomplete entry: '$repo_name' / '$repo_location'"
+              echo "Using basic JSON parsing (no jq)"
+              # Basic parsing without jq - extract first occurrence
+              REPO="$(echo "$repos_json" | grep -o '"name": *"[^"]*"' | head -1 | sed 's/.*"name": *"\([^"]*\)".*/\1/' | sed 's|.*/||')"
+              REGION="$(echo "$repos_json" | grep -o '"location": *"[^"]*"' | head -1 | sed 's/.*"location": *"\([^"]*\)".*/\1/')"
             fi
-          done <<< "$repos_output"
+          fi
           
-          # Fallback: if value format didn't work, try to parse from table format
+          echo "Parsed: REPO='$REPO', REGION='$REGION'"
+          
+          # Fallback: try simple list format if JSON parsing failed
           if [[ -z "$REGION" || -z "$REPO" ]]; then
-            echo "=== Fallback: trying table format ==="
-            table_output="$(gcloud artifacts repositories list --project "${GCP_PROJECT_ID}" \
-                           --filter='format=DOCKER' \
-                           --format='table[no-heading](name,location)' || true)"
-            echo "Table output: '$table_output'"
+            echo "=== Fallback: trying simple list format ==="
             
-            while read -r line; do
-              if [[ -z "$line" ]]; then continue; fi
-              
-              # Split by whitespace
-              repo_name="$(echo "$line" | awk '{print $1}')"
-              repo_location="$(echo "$line" | awk '{print $2}')"
-              
-              echo "Table processing: repo='$repo_name', location='$repo_location'"
-              
-              if [[ -n "$repo_name" && -n "$repo_location" && "$repo_location" != "LOCATION" ]]; then
-                REPO="$repo_name"
-                REGION="$repo_location"
-                echo "✅ Selected from table: $REPO in $REGION"
-                break
-              fi
-            done <<< "$table_output"
+            list_output="$(gcloud artifacts repositories list --project "${GCP_PROJECT_ID}" \
+                          --filter='format=DOCKER' \
+                          --format='value(name,location)' || true)"
+            echo "List output: '$list_output'"
+            
+            if [[ -n "$list_output" ]]; then
+              # Process each line - gcloud value format uses spaces, not tabs
+              while read -r line; do
+                if [[ -z "$line" ]]; then continue; fi
+                
+                echo "Processing line: '$line'"
+                # Extract name and location from space-separated line
+                repo_full="$(echo "$line" | awk '{print $1}')"
+                repo_location="$(echo "$line" | awk '{print $2}')"
+                
+                if [[ -n "$repo_full" && -n "$repo_location" ]]; then
+                  # Extract just the repo name from full path
+                  REPO="$(basename "$repo_full")"
+                  REGION="$repo_location"
+                  echo "✅ Found: $REPO in $REGION"
+                  break
+                fi
+              done <<< "$list_output"
+            fi
           fi
           
           if [[ -z "$REGION" || -z "$REPO" ]]; then
-            echo "❌ No DOCKER Artifact Registry with valid location found."
-            echo "Please check your Artifact Registry repositories in GCP Console."
+            echo "❌ No DOCKER Artifact Registry found."
+            echo "=== Debug: Listing all repositories ==="
+            gcloud artifacts repositories list --project "${GCP_PROJECT_ID}" || true
             exit 1
           fi
           
+          echo "✅ Final selection: $REPO in $REGION"
           echo "repo=$REPO" >> "$GITHUB_OUTPUT"
           echo "region=$REGION" >> "$GITHUB_OUTPUT"
 
