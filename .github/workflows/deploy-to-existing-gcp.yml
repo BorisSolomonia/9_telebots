@@ -250,7 +250,17 @@ jobs:
             set -euo pipefail
             dco() { docker compose "$@" || docker-compose "$@"; }
 
-            APP_DIR="/opt/${APP_NAME}"
+            echo "🔍 Debug environment variables:"
+            echo "APP_NAME: $APP_NAME"
+            echo "AR_HOST: $AR_HOST"
+            echo "IMAGE_URI: $IMAGE_URI"
+
+            if [[ -z "$IMAGE_URI" ]]; then
+              echo "❌ ERROR: IMAGE_URI is empty. Build job may have failed."
+              exit 1
+            fi
+
+            APP_DIR="/opt/$APP_NAME"
             sudo mkdir -p "$APP_DIR"
             sudo chown "$USER:$USER" "$APP_DIR"
             cd "$APP_DIR"
