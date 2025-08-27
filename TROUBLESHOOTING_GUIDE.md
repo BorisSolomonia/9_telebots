@@ -8,7 +8,7 @@ If you suspect the bot token has been compromised:
 ```bash
 # 1. IMMEDIATELY revoke the token
 # Go to @BotFather on Telegram:
-# /mybots → Select Bot → Bot Settings → Revoke Token
+# /mybots → Select Bot → Bot Settings → Revoke Token!!!
 
 # 2. Generate new token
 # /mybots → Select Bot → Bot Settings → Generate New Token!!!
