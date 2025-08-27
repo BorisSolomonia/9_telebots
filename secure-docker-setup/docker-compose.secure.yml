@@ -59,7 +59,7 @@ services:
     # No port exposure (bot doesn't need external access)
     # Only expose if you add a health endpoint
     ports:
-      - "8080:8080"  # Only for health checks
+      - "8081:8080"  # Only for health checks (8081 external to avoid Caddy conflict)
     
     # Logging configuration
     logging:

@@ -254,11 +254,7 @@ deploy_to_vm() {
             # Set permissions
             chmod 600 .env credentials.json 2>/dev/null || true
             
-            # Configure Caddy
-            cd infra/caddy
-            echo \"DOMAIN=${VM_IP}\" > .env
-            echo \"BOT_SERVICE_NAME=${SERVICE_NAME}\" >> .env
-            echo \"HEALTH_PORT=8080\" >> .env
+            # Note: Using existing Caddy on VM, no separate configuration needed
             
             echo '✅ Configuration completed'
         "
@@ -282,19 +278,11 @@ start_services() {
             gcloud auth configure-docker ${REGION}-docker.pkg.dev --quiet
             
             # Stop existing services gracefully
-            echo '⏹️ Stopping existing services...'
+            echo '⏹️ Stopping existing bot services...'
             docker-compose -f secure-docker-setup/docker-compose.secure.yml down --remove-orphans 2>/dev/null || true
-            docker-compose -f infra/caddy/compose.yml down 2>/dev/null || true
             
-            # Start Caddy first
-            echo '🌐 Starting Caddy proxy...'
-            cd infra/caddy
-            docker-compose up -d
-            sleep 5
-            
-            # Start bot application
+            # Start bot application (Caddy already running on VM)
             echo '🤖 Starting bot application...'
-            cd /opt/telegram-bot
             docker-compose -f secure-docker-setup/docker-compose.secure.yml pull
             docker-compose -f secure-docker-setup/docker-compose.secure.yml up -d
             
@@ -328,8 +316,8 @@ health_check() {
                 echo '❌ Caddy health: FAILED'
             fi
             
-            # Test bot
-            if timeout 10 curl -f http://localhost/health/bot 2>/dev/null; then
+            # Test bot (on port 8081 due to Caddy conflict)
+            if timeout 10 curl -f http://localhost:8081/health 2>/dev/null; then
                 echo '✅ Bot health: PASSED'
             else
                 echo '❌ Bot health: FAILED'
