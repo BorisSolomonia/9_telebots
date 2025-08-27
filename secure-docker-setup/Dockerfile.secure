@@ -58,12 +58,9 @@ COPY --chown=botuser:botuser config_template.py .
 # Copy customers.json (retrieved from Secret Manager before build)
 COPY --chown=botuser:botuser customers.json ./data/
 
-# Copy credentials.json (retrieved from Secret Manager before build)
-COPY --chown=botuser:botuser credentials.json .
-
 # Security: Remove write permissions where not needed
 RUN chmod 755 /app \
-    && chmod 644 improved_order_bot.py config_template.py credentials.json \
+    && chmod 644 improved_order_bot.py config_template.py \
     && chmod 755 /app/data /app/logs
 
 # Switch to non-root user
