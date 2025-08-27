@@ -349,34 +349,16 @@ jobs:
       - name: ☁️ Setup gcloud
         uses: google-github-actions/setup-gcloud@v2
 
-      - name: 🧾 Build .env with both bot tokens
+      - name: 🧾 Build .env from Secret Manager (app1-env)
         run: |
           set -x
-          echo "Creating .env with both bot tokens from Secret Manager..."
-          
-          # Get both bot tokens
-          TELEGRAM_TOKEN_BOT=$(gcloud secrets versions access latest --project "${GCP_PROJECT_ID}" --secret "telegram-bot-token" 2>/dev/null || echo "MISSING")
-          ORDER_BOT_TOKEN=$(gcloud secrets versions access latest --project "${GCP_PROJECT_ID}" --secret "order-bot-token" 2>/dev/null || echo "MISSING")
-          OPENAI_API_KEY=$(gcloud secrets versions access latest --project "${GCP_PROJECT_ID}" --secret "openai-api-key" 2>/dev/null || echo "MISSING")
-          SHEET_NAME=$(gcloud secrets versions access latest --project "${GCP_PROJECT_ID}" --secret "sheet-name" 2>/dev/null || echo "9_ტონა_ფული")
-          
-          # Create .env file with both tokens
-          cat > .env << EOF
-          TELEGRAM_TOKEN_BOT=${TELEGRAM_TOKEN_BOT}
-          ORDER_BOT_TOKEN=${ORDER_BOT_TOKEN}
-          OPENAI_API_KEY=${OPENAI_API_KEY}
-          SHEET_NAME=${SHEET_NAME}
-          WORKSHEET_NAME_ORDERS=orders
-          WORKSHEET_NAME_PAYMENTS=Payments
-          REDIS_PASSWORD=secure_redis_pass_$(openssl rand -hex 8)
-          CREDS_FILE=credentials.json
-          CUSTOMERS_FILE=/app/data/customers.json
-          LOG_LEVEL=INFO
-          MESSAGE_COOLDOWN=5
-          EOF
-          
+          echo "Getting .env from existing app1-env secret..."
+          gcloud secrets versions access latest \
+            --project "${GCP_PROJECT_ID}" \
+            --secret "app1-env" > .env
+
           echo "::group::.env (first lines - tokens masked)"
-          sed 's/TOKEN_BOT=.*/TOKEN_BOT=***MASKED***/g' .env | head -n 10
+          sed 's/TOKEN.*=.*/TOKEN***=***MASKED***/g' .env | head -n 10
           echo "::endgroup::"
 
       - name: 🔑 Get short-lived AR token
