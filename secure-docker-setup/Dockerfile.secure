@@ -45,10 +45,11 @@ RUN mkdir -p /app/data /app/logs \
 WORKDIR /app
 
 # Copy Python packages from builder stage
-COPY --from=builder /root/.local /home/botuser/.local
+COPY --from=builder --chown=botuser:botuser /root/.local /home/botuser/.local
 
 # Add local Python packages to PATH
-ENV PATH=/home/botuser/.local/bin:$PATH
+ENV PATH=/home/botuser/.local/bin:$PATH \
+    PYTHONPATH=/home/botuser/.local/lib/python3.11/site-packages:$PYTHONPATH
 
 # Copy application code
 COPY --chown=botuser:botuser improved_order_bot.py .
