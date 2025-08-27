@@ -349,15 +349,34 @@ jobs:
       - name: ☁️ Setup gcloud
         uses: google-github-actions/setup-gcloud@v2
 
-      - name: 🧾 Build .env from Secret Manager (<APP>-env)
+      - name: 🧾 Build .env with both bot tokens
         run: |
           set -x
-          gcloud secrets versions access latest \
-            --project "${GCP_PROJECT_ID}" \
-            --secret "${APP_NAME}-env" > .env
-
-          echo "::group::.env (first lines)"
-          head -n 20 .env || true
+          echo "Creating .env with both bot tokens from Secret Manager..."
+          
+          # Get both bot tokens
+          TELEGRAM_TOKEN_BOT=$(gcloud secrets versions access latest --project "${GCP_PROJECT_ID}" --secret "telegram-bot-token" 2>/dev/null || echo "MISSING")
+          ORDER_BOT_TOKEN=$(gcloud secrets versions access latest --project "${GCP_PROJECT_ID}" --secret "order-bot-token" 2>/dev/null || echo "MISSING")
+          OPENAI_API_KEY=$(gcloud secrets versions access latest --project "${GCP_PROJECT_ID}" --secret "openai-api-key" 2>/dev/null || echo "MISSING")
+          SHEET_NAME=$(gcloud secrets versions access latest --project "${GCP_PROJECT_ID}" --secret "sheet-name" 2>/dev/null || echo "9_ტონა_ფული")
+          
+          # Create .env file with both tokens
+          cat > .env << EOF
+          TELEGRAM_TOKEN_BOT=${TELEGRAM_TOKEN_BOT}
+          ORDER_BOT_TOKEN=${ORDER_BOT_TOKEN}
+          OPENAI_API_KEY=${OPENAI_API_KEY}
+          SHEET_NAME=${SHEET_NAME}
+          WORKSHEET_NAME_ORDERS=orders
+          WORKSHEET_NAME_PAYMENTS=Payments
+          REDIS_PASSWORD=secure_redis_pass_$(openssl rand -hex 8)
+          CREDS_FILE=credentials.json
+          CUSTOMERS_FILE=/app/data/customers.json
+          LOG_LEVEL=INFO
+          MESSAGE_COOLDOWN=5
+          EOF
+          
+          echo "::group::.env (first lines - tokens masked)"
+          sed 's/TOKEN_BOT=.*/TOKEN_BOT=***MASKED***/g' .env | head -n 10
           echo "::endgroup::"
 
       - name: 🔑 Get short-lived AR token
@@ -391,7 +410,7 @@ jobs:
           key: ${{ secrets.VM_SSH_KEY }}
           overwrite: true
           strip_components: 0
-          source: "secure-docker-setup/,.env"
+          source: "secure-docker-setup/,multi-bot-compose.yml,.env"
           target: "/opt/${{ env.APP_NAME }}/"
           debug: true
 
@@ -549,51 +568,31 @@ jobs:
 
             echo "🧹 Stop previous services (idempotent)"
             dco -f secure-docker-setup/docker-compose.secure.yml down --remove-orphans || true
-            if [ -d "infra/caddy" ]; then
-              echo "Stopping Caddy services (if configured)..."
-              ( cd infra/caddy && if grep -q "^[[:space:]]*[^#].*:" compose.yml 2>/dev/null; then dco down || true; else echo "Caddy compose empty - nothing to stop"; fi )
-            fi
+            dco -f multi-bot-compose.yml down --remove-orphans || true
             
-            # Update image
-            echo "📝 Patch compose to use ${IMAGE_URI}"
-            echo "Running image replacements..."
+            # Update multi-bot compose file to use built image
+            echo "📝 Patch multi-bot-compose.yml to use ${IMAGE_URI}"
             
-            # Check if compose file still exists and has content
-            if [ -f "secure-docker-setup/docker-compose.secure.yml" ] && [ -s "secure-docker-setup/docker-compose.secure.yml" ]; then
-              echo "Compose file exists and has content"
+            if [ -f "multi-bot-compose.yml" ]; then
+              echo "✅ Multi-bot compose file found"
               
-              # Show what we're replacing
-              echo "Looking for 'build:' lines to replace:"
-              grep -n "build:" secure-docker-setup/docker-compose.secure.yml || echo "No build: lines found"
+              # Replace build sections with image URI for both bots
+              sed -i "s|^\s*build:\s*$|    image: ${IMAGE_URI}|g" multi-bot-compose.yml || true
+              sed -i "/^\s*context:/d" multi-bot-compose.yml || true  
+              sed -i "/^\s*dockerfile:/d" multi-bot-compose.yml || true
               
-              # Apply replacements - handle multi-line build block properly
-              # First, replace the build: line with image:
-              sed -i "s|^\s*build:\s*$|    image: ${IMAGE_URI}|g" secure-docker-setup/docker-compose.secure.yml || true
-              # Then remove any context and dockerfile lines (they're now invalid)
-              sed -i "/^\s*context:/d" secure-docker-setup/docker-compose.secure.yml || true  
-              sed -i "/^\s*dockerfile:/d" secure-docker-setup/docker-compose.secure.yml || true
-              
-              echo "Final compose file size:" $(wc -l secure-docker-setup/docker-compose.secure.yml 2>/dev/null || echo "0")
-              
-              # Show final result
-              echo "After replacements, checking for 'image:' lines:"
-              grep -n "image:" secure-docker-setup/docker-compose.secure.yml || echo "No image: lines found"
+              echo "✅ Updated multi-bot-compose.yml with image: ${IMAGE_URI}"
               
               # Validate YAML syntax
-              echo "Validating YAML syntax:"
-              if docker compose -f secure-docker-setup/docker-compose.secure.yml config --quiet 2>/dev/null; then
-                echo "✅ YAML syntax is valid"
+              if docker compose -f multi-bot-compose.yml config --quiet 2>/dev/null; then
+                echo "✅ Multi-bot YAML syntax is valid"
               else
-                echo "❌ YAML syntax error detected!"
-                echo "Showing problematic lines around the image section:"
-                grep -n -A 5 -B 5 "image:" secure-docker-setup/docker-compose.secure.yml || true
-                echo "Full file contents:"
-                cat -n secure-docker-setup/docker-compose.secure.yml | head -20
+                echo "❌ Multi-bot YAML syntax error!"
+                exit 1
               fi
-              
             else
-              echo "❌ Compose file is missing or empty after modifications!"
-              ls -la secure-docker-setup/
+              echo "❌ multi-bot-compose.yml not found!"
+              ls -la . | head -20
               exit 1
             fi
 
@@ -608,10 +607,30 @@ jobs:
             chmod 600 .env 2>/dev/null || true
 
             echo "ℹ️  Using existing Caddy on VM - no separate Caddy deployment"
+            
+            echo "📁 Setup shared customers.json volume"
+            # Create shared volume for both bots
+            docker volume create multi-bot-compose_shared_customer_data 2>/dev/null || true
+            
+            # Copy existing customers.json to shared volume if it exists
+            if [ -f "secure-docker-setup/customers.json" ]; then
+              echo "Copying existing customers.json to shared volume..."
+              docker run --rm \
+                -v multi-bot-compose_shared_customer_data:/data \
+                -v $(pwd)/secure-docker-setup:/host:ro \
+                alpine cp /host/customers.json /data/customers.json 2>/dev/null || true
+              echo "✅ Copied customers.json to shared volume"
+            else
+              echo "Creating empty customers.json in shared volume..."
+              echo '[]' | docker run --rm -i \
+                -v multi-bot-compose_shared_customer_data:/data \
+                alpine tee /data/customers.json >/dev/null
+              echo "✅ Created empty customers.json"
+            fi
 
-            echo "🤖 Deploy app"
-            dco -f secure-docker-setup/docker-compose.secure.yml pull
-            dco -f secure-docker-setup/docker-compose.secure.yml up -d
+            echo "🤖 Deploy both bots"
+            dco -f multi-bot-compose.yml pull
+            dco -f multi-bot-compose.yml up -d
 
             echo "🔎 Containers:"
             docker ps --format 'table {{.Names}}\t{{.Status}}\t{{.Ports}}'
@@ -650,11 +669,14 @@ jobs:
             docker ps --format 'table {{.Names}}\t{{.Status}}\t{{.Ports}}' || true
 
             echo
-            echo "📋 Recent app logs (tail 200)"
-            # Use the actual container name from the compose file
-            docker logs order-bot-secure --tail 200 || docker logs ${APP_NAME} --tail 200 || true
+            echo "📋 Recent bot logs"
+            echo "--- Order Bot (last 100 lines) ---"
+            docker logs order-bot-secure --tail 100 || true
+            
+            echo
+            echo "--- Payment Bot (last 100 lines) ---"
+            docker logs payment-bot-secure --tail 100 || true
 
             echo
             echo "📋 Recent caddy logs (tail 120)"
-            docker logs caddy  --tail 120 || true
-            docker logs caddy-proxy --tail 120 || true
+            docker logs caddy-caddy-1 --tail 120 || true

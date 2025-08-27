@@ -9,6 +9,8 @@ services:
     container_name: order-bot-secure
     restart: unless-stopped
     
+    env_file:
+      - .env
     environment:
       - ORDER_BOT_TOKEN=${ORDER_BOT_TOKEN}
       - OPENAI_API_KEY=${OPENAI_API_KEY}
@@ -50,8 +52,10 @@ services:
     container_name: payment-bot-secure
     restart: unless-stopped
     
+    env_file:
+      - .env  
     environment:
-      - TELEGRAM_TOKEN_BOT=${PAYMENT_BOT_TOKEN}  # Different token!
+      - TELEGRAM_TOKEN_BOT=${TELEGRAM_TOKEN_BOT}
       - OPENAI_API_KEY=${OPENAI_API_KEY}
       - CREDS_FILE=credentials.json
       - CUSTOMERS_FILE=/app/data/customers.json
