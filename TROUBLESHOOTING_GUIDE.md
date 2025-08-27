@@ -11,7 +11,7 @@ If you suspect the bot token has been compromised:
 # /mybots → Select Bot → Bot Settings → Revoke Token
 
 # 2. Generate new token
-# /mybots → Select Bot → Bot Settings → Generate New Token
+# /mybots → Select Bot → Bot Settings → Generate New Token!!!
 
 # 3. Update secret in Secret Manager
 echo "NEW_TOKEN_HERE" | gcloud secrets versions add telegram-bot-token --data-file=-
