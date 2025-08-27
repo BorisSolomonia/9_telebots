@@ -54,15 +54,16 @@ ENV PATH=/home/botuser/.local/bin:$PATH \
 # Copy application code
 COPY --chown=botuser:botuser improved_order_bot.py .
 COPY --chown=botuser:botuser config_template.py .
-COPY --chown=botuser:botuser create_credentials.py .
 
 # Copy customers.json (retrieved from Secret Manager before build)
 COPY --chown=botuser:botuser customers.json ./data/
 
+# Copy credentials.json (retrieved from Secret Manager before build)
+COPY --chown=botuser:botuser credentials.json .
 
 # Security: Remove write permissions where not needed
 RUN chmod 755 /app \
-    && chmod 644 improved_order_bot.py config_template.py \
+    && chmod 644 improved_order_bot.py config_template.py credentials.json \
     && chmod 755 /app/data /app/logs
 
 # Switch to non-root user
@@ -111,22 +112,10 @@ EXPOSE 8080
 VOLUME ["/app/data", "/app/logs"]
 
 # Security: Use exec form for better signal handling
-# Create a startup script that handles credentials creation
-COPY --chown=botuser:botuser <<EOF /app/start.sh
-#!/bin/bash
-set -e
+ENTRYPOINT ["python", "-u"]
 
-echo "🔧 Setting up credentials..."
-python create_credentials.py
-
-echo "🚀 Starting Telegram bot..."
-exec python -u improved_order_bot.py
-EOF
-
-RUN chmod +x /app/start.sh
-
-# Use the startup script
-ENTRYPOINT ["/app/start.sh"]
+# Default command (can be overridden)
+CMD ["improved_order_bot.py"]
 
 # Metadata
 LABEL maintainer="telegram-bot-team" \
