@@ -31,6 +31,7 @@ services:
     volumes:
       - customer_data:/app/data
       - ./logs:/app/logs:rw
+      - ./credentials.json:/app/credentials.json:ro
     
     # Resource limits
     deploy:
