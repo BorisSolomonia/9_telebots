@@ -1,0 +1,108 @@
+version: '3.9'
+
+services:
+  # Order processing bot (improved_order_bot.py)
+  order-bot:
+    build: 
+      context: .
+      dockerfile: secure-docker-setup/Dockerfile.secure
+    container_name: order-bot-secure
+    restart: unless-stopped
+    
+    environment:
+      - ORDER_BOT_TOKEN=${ORDER_BOT_TOKEN}
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - CREDS_FILE=credentials.json
+      - CUSTOMERS_FILE=/app/data/customers.json
+      - SHEET_NAME=${SHEET_NAME:-9_ტონა_ფული}
+      - WORKSHEET_NAME=${WORKSHEET_NAME_ORDERS:-orders}
+      
+    user: "1001:1001"
+    read_only: true
+    
+    tmpfs:
+      - /tmp
+    volumes:
+      - shared_customer_data:/app/data:rw  # SHARED customers.json
+      - ./logs:/app/logs:rw
+      - ./credentials.json:/app/credentials.json:ro
+    
+    command: ["improved_order_bot.py"]
+    
+    ports:
+      - "8081:8080"
+      
+    healthcheck:
+      test: ["CMD", "python", "-c", "import os; exit(0 if os.path.exists('/proc/1') else 1)"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+      
+    networks:
+      - bot_network
+
+  # Payment processing bot (bot.py)  
+  payment-bot:
+    build: 
+      context: .
+      dockerfile: secure-docker-setup/Dockerfile.secure
+    container_name: payment-bot-secure
+    restart: unless-stopped
+    
+    environment:
+      - TELEGRAM_TOKEN_BOT=${PAYMENT_BOT_TOKEN}  # Different token!
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - CREDS_FILE=credentials.json
+      - CUSTOMERS_FILE=/app/data/customers.json
+      - SHEET_NAME=${SHEET_NAME:-9_ტონა_ფული}
+      - WORKSHEET_NAME=${WORKSHEET_NAME_PAYMENTS:-Payments}
+      
+    user: "1001:1001" 
+    read_only: true
+    
+    tmpfs:
+      - /tmp
+    volumes:
+      - shared_customer_data:/app/data:rw  # SHARED customers.json
+      - ./logs:/app/logs:rw
+      - ./credentials.json:/app/credentials.json:ro
+      
+    command: ["bot.py"]  # Different script
+    
+    ports:
+      - "8082:8080"
+      
+    healthcheck:
+      test: ["CMD", "python", "-c", "import os; exit(0 if os.path.exists('/proc/1') else 1)"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+      
+    networks:
+      - bot_network
+
+  redis:
+    image: redis:7-alpine
+    container_name: bot-redis
+    restart: unless-stopped
+    command: redis-server --appendonly yes --requirepass ${REDIS_PASSWORD}
+    volumes:
+      - redis_data:/data
+    networks:
+      - bot_network
+    user: "999:999"
+    read_only: true
+    tmpfs:
+      - /tmp
+
+volumes:
+  shared_customer_data:
+    driver: local  # Single shared volume for customers.json
+  redis_data:
+    driver: local
+
+networks:
+  bot_network:
+    driver: bridge

@@ -29,10 +29,10 @@ services:
     tmpfs:
       - /tmp
     volumes:
-      - customer_data:/app/data
+      - customer_data:/app/data:rw
       - ./logs:/app/logs:rw
       - ./credentials.json:/app/credentials.json:ro
-      - ./customers.json:/app/customers.json:ro
+      # Copy customers.json to writable data volume instead of read-only bind mount
     
     # Resource limits
     deploy:
