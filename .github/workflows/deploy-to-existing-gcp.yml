@@ -485,6 +485,37 @@ jobs:
               else
                 echo "✅ secure-docker-setup/.env already exists"
               fi
+              
+              echo "🔑 Create Google Sheets credentials file from environment"
+              cd secure-docker-setup
+              # Check if GOOGLE_CREDENTIALS or similar exists in .env
+              if grep -q "GOOGLE_CREDENTIALS\|SHEETS_CREDS\|GCP_SA_KEY" .env; then
+                echo "Found Google credentials in .env, creating credentials.json"
+                
+                # Extract credentials (try different possible variable names)
+                CREDS_JSON=$(grep -E "^(GOOGLE_CREDENTIALS|SHEETS_CREDS|GCP_SA_KEY)=" .env | head -1 | cut -d= -f2- | tr -d '"'"''"'"')
+                
+                if [ -n "$CREDS_JSON" ]; then
+                  echo "$CREDS_JSON" > credentials.json
+                  chmod 600 credentials.json
+                  echo "✅ Created credentials.json from environment variable"
+                  
+                  # Validate it's valid JSON
+                  if python3 -m json.tool credentials.json > /dev/null 2>&1; then
+                    echo "✅ credentials.json is valid JSON"
+                  else
+                    echo "❌ credentials.json is invalid JSON - check the environment variable format"
+                    head -c 100 credentials.json
+                  fi
+                else
+                  echo "❌ Found credentials variable but value is empty"
+                fi
+              else
+                echo "❌ No Google credentials found in .env file"
+                echo "Looking for variables containing 'CRED' or 'GOOGLE':"
+                grep -i -E "(cred|google)" .env || echo "No credential variables found"
+              fi
+              cd ..
             else
               echo "❌ .env not found in current directory: $(pwd)"
               echo "Available files (first 30):"
