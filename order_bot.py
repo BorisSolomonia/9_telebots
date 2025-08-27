@@ -529,7 +529,7 @@ async def main() -> None:
     async def cb_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await bot.handle_callback(update, context)
     
-    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, msg_handler))
+    application.add_handler(MessageHandler((filters.TEXT & ~filters.COMMAND) & (filters.ChatType.PRIVATE | filters.ChatType.GROUP | filters.ChatType.SUPERGROUP), msg_handler))
     application.add_handler(CallbackQueryHandler(cb_handler))
 
     if application.job_queue:
