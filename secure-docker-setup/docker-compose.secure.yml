@@ -102,7 +102,7 @@ volumes:
 networks:
   bot_network:
     driver: bridge
-    internal: true  # No external network access except for bot
+    # internal: true  # Commented out - bot needs external access for APIs
 
 # Docker secrets (for production)
 secrets:
