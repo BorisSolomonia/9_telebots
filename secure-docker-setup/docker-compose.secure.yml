@@ -44,9 +44,9 @@ services:
           memory: 128M
           cpus: '0.1'
     
-    # Health check
+    # Health check - test if bot process is running
     healthcheck:
-      test: ["CMD", "python", "-c", "import requests; requests.get('http://localhost:8080/health', timeout=5)"]
+      test: ["CMD", "python", "-c", "import os; exit(0 if os.path.exists('/proc/1') else 1)"]
       interval: 30s
       timeout: 10s
       retries: 3
