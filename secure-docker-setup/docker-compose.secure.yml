@@ -32,6 +32,7 @@ services:
       - customer_data:/app/data
       - ./logs:/app/logs:rw
       - ./credentials.json:/app/credentials.json:ro
+      - ./customers.json:/app/customers.json:ro
     
     # Resource limits
     deploy:
