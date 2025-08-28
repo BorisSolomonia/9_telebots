@@ -130,13 +130,13 @@ class GPTCache:
             value, timestamp = self._cache[key]
             if time.time() - timestamp < self.ttl:
                 self._access_times[key] = time.time()
-                logger.debug("cache_hit", key=key)
+                logger.debug(f"GPT_CACHE: Cache hit for key: {key}")
                 return value
             else:
                 # Expired
                 del self._cache[key]
                 del self._access_times[key]
-                logger.debug("cache_expired", key=key)
+                logger.debug(f"GPT_CACHE: Cache expired for key: {key}")
         return None
     
     def set(self, text: str, customer_list: List[str], value: Dict[str, Any]) -> None:
@@ -148,17 +148,17 @@ class GPTCache:
             oldest_key = min(self._access_times, key=self._access_times.get)
             del self._cache[oldest_key]
             del self._access_times[oldest_key]
-            logger.debug("cache_evicted", key=oldest_key)
+            logger.debug(f"GPT_CACHE: Cache evicted oldest key: {oldest_key}")
         
         self._cache[key] = (value, time.time())
         self._access_times[key] = time.time()
-        logger.debug("cache_stored", key=key)
+        logger.debug(f"GPT_CACHE: Cache stored for key: {key}")
     
     def clear(self) -> None:
         """Clear all cached entries."""
         self._cache.clear()
         self._access_times.clear()
-        logger.info("cache_cleared")
+        logger.info("GPT_CACHE: Cache cleared")
 
 class SecureFileManager:
     """Secure file operations with locking and atomic writes."""
@@ -173,7 +173,7 @@ class SecureFileManager:
                 yield f
             # Atomic move
             Path(temp_path).replace(Path(file_path))
-            logger.debug("file_written_atomically", path=file_path)
+            logger.debug(f"FILE_IO: File written atomically: {file_path}")
         except Exception:
             # Cleanup temp file on error
             Path(temp_path).unlink(missing_ok=True)
@@ -187,10 +187,10 @@ class SecureFileManager:
                 content = await f.read()
                 return json.loads(content)
         except FileNotFoundError:
-            logger.warning("file_not_found", path=file_path)
+            logger.warning(f"FILE_IO: File not found: {file_path}")
             return None
         except json.JSONDecodeError as e:
-            logger.error("json_decode_error", path=file_path, error=str(e))
+            logger.error(f"FILE_IO: JSON decode error in {file_path}: {e}")
             raise ValueError(f"Invalid JSON in {file_path}: {e}")
     
     @staticmethod
@@ -211,11 +211,11 @@ class OpenAIClientManager:
         try:
             # Test with a minimal request
             self.client.models.list()
-            logger.info("openai_client_validated")
+            logger.info("OPENAI: Client validated successfully")
         except openai.AuthenticationError:
             raise ValueError("Invalid OPENAI_API_KEY")
         except Exception as e:
-            logger.error("openai_validation_failed", error=str(e))
+            logger.error(f"OPENAI: Validation failed: {e}")
             raise ValueError(f"Failed to validate OpenAI client: {e}")
 
 class SheetsClientManager:
@@ -238,9 +238,9 @@ class SheetsClientManager:
                     self.creds_file, self.scope
                 )
                 self._client = gspread.authorize(creds)
-                logger.info("sheets_client_initialized")
+                logger.info("SHEETS: Client initialized successfully")
             except Exception as e:
-                logger.error("sheets_client_error", error=str(e))
+                logger.error(f"SHEETS: Client error: {e}")
                 raise
         yield self._client
     
@@ -251,7 +251,7 @@ class SheetsClientManager:
                 sheet = client.open(sheet_name)
             except gspread.exceptions.SpreadsheetNotFound:
                 sheet = client.create(sheet_name)
-                logger.info("spreadsheet_created", name=sheet_name)
+                logger.info(f"SHEETS: Spreadsheet created: {sheet_name}")
             
             try:
                 worksheet = sheet.worksheet(worksheet_name)
@@ -259,7 +259,7 @@ class SheetsClientManager:
                 worksheet = sheet.add_worksheet(
                     title=worksheet_name, rows=1000, cols=5
                 )
-                logger.info("worksheet_created", name=worksheet_name)
+                logger.info(f"SHEETS: Worksheet created: {worksheet_name}")
             
             return worksheet
 
@@ -295,7 +295,7 @@ class ImprovedOrderBot:
     def _setup_signal_handlers(self) -> None:
         """Setup graceful shutdown signal handlers."""
         def signal_handler(signum, frame):
-            logger.info("shutdown_signal_received", signal=signum)
+            logger.info(f"SHUTDOWN: Signal received: {signum}")
             asyncio.create_task(self._graceful_shutdown())
         
         signal.signal(signal.SIGTERM, signal_handler)
@@ -303,15 +303,15 @@ class ImprovedOrderBot:
     
     async def _graceful_shutdown(self) -> None:
         """Handle graceful shutdown."""
-        logger.info("graceful_shutdown_started")
+        logger.info("SHUTDOWN: Graceful shutdown started")
         self.shutdown_event.set()
         
         # Save any pending data
         try:
             await self._save_customers()
-            logger.info("customers_saved_on_shutdown")
+            logger.info("SHUTDOWN: Customers saved successfully")
         except Exception as e:
-            logger.error("shutdown_save_error", error=str(e))
+            logger.error(f"SHUTDOWN: Save error: {e}")
     
     async def _load_customers(self) -> None:
         """Load customers from file or fetch from GCP secret if not found."""
@@ -422,9 +422,9 @@ class ImprovedOrderBot:
             await SecureFileManager.write_json(
                 self.config.customers_file, self.customers
             )
-            logger.info("customers_saved", file=self.config.customers_file)
+            logger.info(f"FILE_IO: Customers saved to {self.config.customers_file}")
         except Exception as e:
-            logger.error("customers_save_error", error=str(e))
+            logger.error(f"FILE_IO: Customers save error: {e}")
             raise
     
     def _check_rate_limit(self, user_id: int) -> bool:
@@ -433,7 +433,7 @@ class ImprovedOrderBot:
         last_message = self.user_last_message.get(user_id, 0)
         
         if now - last_message < self.config.message_cooldown:
-            logger.debug("rate_limit_hit", user_id=user_id)
+            logger.debug(f"RATE_LIMIT: Hit for user {user_id}")
             return False
         
         self.user_last_message[user_id] = now
@@ -454,7 +454,7 @@ class ImprovedOrderBot:
         self.pending_messages.clear()
         
         self.last_cleanup = now
-        logger.debug("cleanup_completed")
+        logger.debug("CLEANUP: Periodic cleanup completed")
     
     @retry(
         stop=stop_after_attempt(3),
@@ -611,14 +611,11 @@ class ImprovedOrderBot:
             
             worksheet.append_row(row)
             
-            logger.info("order_recorded",
-                       customer=customer,
-                       amount=amount,
-                       product=product)
+            logger.info(f"SHEETS: Order recorded - Customer: {customer}, Amount: {amount}, Product: {product}")
             return True
             
         except Exception as e:
-            logger.error("sheets_recording_error", error=str(e))
+            logger.error(f"SHEETS: Recording error: {e}")
             return False
     
     async def handle_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -804,7 +801,7 @@ async def main():
     try:
         # Load configuration
         config = Config.from_env()
-        logger.info("bot_starting", config_loaded=True)
+        logger.info("BOT_STARTUP: Starting Improved Order Bot with enhanced logging")
         
         # Initialize bot
         bot = ImprovedOrderBot(config)
@@ -820,24 +817,24 @@ async def main():
             MessageHandler(filters.TEXT & ~filters.COMMAND, message_handler)
         )
         
-        logger.info("bot_handlers_registered")
+        logger.info("BOT_STARTUP: Bot handlers registered successfully")
         
         # Start bot
-        logger.info("bot_starting_polling")
+        logger.info("BOT_STARTUP: Starting bot polling...")
         await application.run_polling(
             close_loop=False,
             stop_signals=None  # We handle signals manually
         )
         
     except Exception as e:
-        logger.error("bot_startup_error", error=str(e))
+        logger.error(f"BOT_STARTUP: Bot startup error: {e}")
         raise
 
 if __name__ == '__main__':
     try:
         asyncio.run(main())
     except KeyboardInterrupt:
-        logger.info("bot_stopped_by_user")
+        logger.info("BOT_SHUTDOWN: Bot stopped by user")
     except Exception as e:
-        logger.error("bot_fatal_error", error=str(e))
+        logger.error(f"BOT_SHUTDOWN: Bot fatal error: {e}")
         raise
