@@ -333,25 +333,27 @@ class ImprovedOrderBot:
     
     async def _load_customers(self) -> None:
         """Load customers from file or fetch from GCP secret if not found."""
-        logger.info("customer_loading_started", file=self.config.customers_file)
+        logger.info("CUSTOMER_LOADING: Starting customer data initialization...")
         
         # First, try to load existing file
         data = await SecureFileManager.read_json(self.config.customers_file)
         if data is not None and isinstance(data, list) and len(data) > 0:
             self.customers = data
-            logger.info("customers_loaded_from_file", 
-                       count=len(self.customers),
-                       file=self.config.customers_file)
+            logger.info(f"CUSTOMER_LOADING: ✅ Successfully loaded customers.json")
+            logger.info(f"CUSTOMER_LOADING: Found {len(self.customers)} total customer entries")
+            
+            # Log first few customers as sample
+            if self.customers:
+                sample_customers = self.customers[:3]
+                logger.info(f"CUSTOMER_LOADING: Sample customers: {sample_customers}")
         else:
             # File doesn't exist or is empty, try GCP secret
-            logger.info("customers_file_not_found_trying_gcp_secret", 
-                       file=self.config.customers_file)
+            logger.info("CUSTOMER_LOADING: customers.json not found or failed to load, trying GCP Secret Manager...")
             
             if await self._load_from_gcp_secret():
-                logger.info("customers_loaded_from_gcp_secret", 
-                           count=len(self.customers))
+                logger.info(f"CUSTOMER_LOADING: ✅ Successfully loaded {len(self.customers)} customers from GCP secret")
             else:
-                logger.error("customers_load_failed_using_empty_list")
+                logger.error("CUSTOMER_LOADING: ❌ All methods failed, starting with empty customer list")
                 self.customers = []
         
         self._build_customer_mapping()
@@ -359,35 +361,31 @@ class ImprovedOrderBot:
     async def _load_from_gcp_secret(self) -> bool:
         """Load customers data directly from GCP Secret Manager to memory."""
         if not GCP_AVAILABLE:
-            logger.error("gcp_secret_manager_not_available")
+            logger.error("CUSTOMER_LOADING: GCP Secret Manager library not available")
             return False
         
         try:
-            logger.info("fetching_from_gcp_secret", 
-                       project=self.project_id, 
-                       secret=self.secret_id)
+            logger.info(f"CUSTOMER_LOADING: Fetching from GCP secret: projects/{self.project_id}/secrets/{self.secret_id}")
             
             # Initialize client
             client = secretmanager.SecretManagerServiceClient()
             secret_name = f"projects/{self.project_id}/secrets/{self.secret_id}/versions/latest"
             
-            logger.info("accessing_secret", name=secret_name)
+            logger.info(f"CUSTOMER_LOADING: Accessing secret: {secret_name}")
             response = client.access_secret_version(request={"name": secret_name})
             
             # Decode the secret payload
             secret_data = response.payload.data.decode("UTF-8")
-            logger.info("secret_data_retrieved", size=len(secret_data))
+            logger.info(f"CUSTOMER_LOADING: Retrieved secret data ({len(secret_data)} characters)")
             
             # Parse and validate JSON
             customers_data = json.loads(secret_data)
             
             if not isinstance(customers_data, list):
-                logger.error("invalid_secret_data_format", 
-                           expected="list", 
-                           got=type(customers_data).__name__)
+                logger.error(f"CUSTOMER_LOADING: Expected list, got {type(customers_data).__name__}")
                 return False
             
-            logger.info("secret_data_parsed", count=len(customers_data))
+            logger.info(f"CUSTOMER_LOADING: Parsed {len(customers_data)} customer entries from secret")
             
             # Store directly in memory (no file write needed for read-only filesystem)
             self.customers = customers_data
@@ -395,21 +393,25 @@ class ImprovedOrderBot:
             # Log first few customers as sample
             if self.customers:
                 sample_customers = self.customers[:3]
-                logger.info("sample_customers_from_secret", samples=sample_customers)
+                logger.info(f"CUSTOMER_LOADING: Sample customers from secret: {sample_customers}")
             
-            logger.info("customers_loaded_from_secret_successfully")
+            logger.info("CUSTOMER_LOADING: ✅ Successfully loaded customer data from GCP secret to memory")
             return True
             
         except json.JSONDecodeError as e:
-            logger.error("invalid_json_in_secret", error=str(e))
+            logger.error(f"CUSTOMER_LOADING: ❌ Invalid JSON in GCP secret: {e}")
             return False
         except Exception as e:
-            logger.error("failed_to_fetch_from_gcp_secret", error=str(e))
+            logger.error(f"CUSTOMER_LOADING: ❌ Failed to fetch from GCP secret: {e}")
+            logger.error("CUSTOMER_LOADING: Make sure VM has proper GCP permissions for Secret Manager")
             return False
     
     def _build_customer_mapping(self) -> None:
         """Build optimized customer name mapping."""
+        logger.info("CUSTOMER_LOADING: Building customer name mapping...")
         self.name_to_full.clear()
+        mapping_count = 0
+        
         for customer in self.customers:
             customer = customer.strip()
             if customer:
@@ -421,8 +423,16 @@ class ImprovedOrderBot:
                     self.name_to_full[name.lower()] = customer
                     # Also store the full customer string for exact matching
                     self.name_to_full[customer.lower()] = customer
+                    mapping_count += 1
         
-        logger.debug("customer_mapping_built", count=len(self.name_to_full))
+        logger.info(f"CUSTOMER_LOADING: ✅ Created {mapping_count} customer name mappings")
+        
+        if mapping_count > 0:
+            # Log sample mappings
+            sample_mappings = dict(list(self.name_to_full.items())[:5])
+            logger.info(f"CUSTOMER_LOADING: Sample mappings: {sample_mappings}")
+        else:
+            logger.warning("CUSTOMER_LOADING: ⚠️ No customer name mappings created!")
     
     async def _save_customers(self) -> None:
         """Save customers to file atomically."""
@@ -471,32 +481,38 @@ class ImprovedOrderBot:
     )
     async def parse_order_with_gpt(self, text: str) -> Optional[Dict[str, Any]]:
         """Parse order using GPT with caching and improved error handling."""
+        logger.info(f"OPENAI_ORDER: Starting GPT order parsing for: '{text}'")
+        
         # Check cache first
         customer_list = list(self.name_to_full.values())[:50]  # Limit for performance
         cached_result = self.gpt_cache.get(text, customer_list)
         if cached_result:
+            logger.info(f"OPENAI_ORDER: Using cached result for order parsing")
             return cached_result
         
         # Prepare GPT request
         system_prompt = self._build_gpt_system_prompt(customer_list)
+        logger.info(f"OPENAI_ORDER: Sending {len(customer_list)} customer entries to GPT for context")
+        
+        user_message = f"Parse this order: {text}"
+        logger.info(f"OPENAI_ORDER: Sending request to GPT-3.5-turbo with message: '{user_message}'")
         
         try:
             response = self.openai_client.client.chat.completions.create(
                 model="gpt-3.5-turbo",
                 messages=[
                     {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": f"Parse this order: {text}"}
+                    {"role": "user", "content": user_message}
                 ],
                 max_tokens=200,
                 temperature=0.1
             )
             
             content = response.choices[0].message.content.strip()
+            usage = response.usage
             
-            # Log API usage (without sensitive data)
-            logger.info("gpt_request_completed",
-                       input_length=len(text),
-                       tokens_used=response.usage.total_tokens if response.usage else 0)
+            logger.info(f"OPENAI_ORDER: GPT response received: '{content}'")
+            logger.info(f"OPENAI_ORDER: Token usage - Prompt: {usage.prompt_tokens}, Completion: {usage.completion_tokens}, Total: {usage.total_tokens}")
             
             # Parse response
             parsed = self._parse_gpt_response(content)
@@ -504,22 +520,20 @@ class ImprovedOrderBot:
             if parsed and self._validate_parsed_order(parsed):
                 # Cache successful result
                 self.gpt_cache.set(text, customer_list, parsed)
-                logger.info("order_parsed_successfully",
-                           customer=parsed.get('customer'),
-                           amount=parsed.get('amount'))
+                logger.info(f"OPENAI_ORDER: Order parsing successful! Customer: '{parsed.get('customer')}', Amount: {parsed.get('amount')}, Product: '{parsed.get('product')}'")
                 return parsed
             else:
-                logger.warning("gpt_parsing_failed", response=content)
+                logger.warning(f"OPENAI_ORDER: GPT parsing failed - Response: '{content}'")
                 return None
                 
         except openai.AuthenticationError as e:
-            logger.error("openai_auth_error", error=str(e))
+            logger.error(f"OPENAI_ORDER: Authentication error: {e}")
             return None
         except openai.RateLimitError as e:
-            logger.error("openai_rate_limit", error=str(e))
+            logger.error(f"OPENAI_ORDER: Rate limit error: {e}")
             raise  # Retry will handle this
         except Exception as e:
-            logger.error("gpt_unexpected_error", error=str(e))
+            logger.error(f"OPENAI_ORDER: Unexpected error during order parsing: {e}")
             return None
     
     def _build_gpt_system_prompt(self, customer_list: List[str]) -> str:
@@ -637,11 +651,22 @@ class ImprovedOrderBot:
         try:
             # Check for commands first
             text = message.text.strip()
-            logger.info("processing_message", user=username, text_length=len(text))
+            logger.info(f"PROCESSING: Processing message from {username}: '{text}'")
             
             if text.startswith('new:'):
                 await self.handle_new_customer_command(text, message, username)
                 return
+            
+            # Check customer availability before processing
+            if len(self.customers) == 0:
+                logger.error("CUSTOMER_SEARCH: ❌ No customers loaded! Cannot process orders.")
+                logger.error("CUSTOMER_SEARCH: Check if customers.json exists and contains valid data or GCP secret is accessible")
+                await message.reply_text(
+                    "❌ კლიენტების სია არ არის ჩატვირთული. გთხოვთ სცადოთ მოგვიანებით."
+                )
+                return
+            
+            logger.info(f"CUSTOMER_SEARCH: Available customers: {len(self.customers)} total, {len(self.name_to_full)} mapped names")
             
             # Process order
             parsed = await self.parse_order_with_gpt(text)
@@ -684,7 +709,7 @@ class ImprovedOrderBot:
     
     async def handle_new_customer_command(self, text: str, message, username: str) -> None:
         """Handle 'new:<customer name>' command to add new customer."""
-        logger.info("new_customer_command", user=username, text=text)
+        logger.info(f"NEW_CUSTOMER: Processing command from {username}: '{text}'")
         
         try:
             customer_name = text[4:].strip()  # Remove 'new:' prefix
@@ -695,11 +720,11 @@ class ImprovedOrderBot:
                 )
                 return
             
-            logger.info("attempting_to_add_customer", customer=customer_name)
+            logger.info(f"NEW_CUSTOMER: Attempting to add customer: '{customer_name}'")
             
             # Check if customer already exists
             if customer_name in self.customers:
-                logger.info("customer_already_exists", customer=customer_name)
+                logger.info(f"NEW_CUSTOMER: Customer '{customer_name}' already exists")
                 await message.reply_text(
                     f"⚠️ კლიენტი '{customer_name}' უკვე არსებობს."
                 )
@@ -711,9 +736,7 @@ class ImprovedOrderBot:
             # Rebuild customer mapping
             self._build_customer_mapping()
             
-            logger.info("customer_added_to_local_list", 
-                       customer=customer_name, 
-                       total_customers=len(self.customers))
+            logger.info(f"NEW_CUSTOMER: Added '{customer_name}' to local list ({len(self.customers)} total customers)")
             
             # Update GCP secret
             success = await self.update_gcp_secret()
@@ -723,9 +746,7 @@ class ImprovedOrderBot:
                     f"✅ კლიენტი დამატებულია:\n{customer_name}\n\n"
                     f"სულ კლიენტები: {len(self.customers)}"
                 )
-                logger.info("customer_added_successfully", 
-                           customer=customer_name,
-                           gcp_updated=True)
+                logger.info(f"NEW_CUSTOMER: Successfully added '{customer_name}' and updated GCP secret")
             else:
                 # Remove from local list if GCP update failed
                 self.customers.remove(customer_name)
@@ -735,13 +756,10 @@ class ImprovedOrderBot:
                     "❌ კლიენტის დამატება ვერ მოხერხდა.\n"
                     "GCP Secret Manager-ის განახლება ვერ მოხერხდა."
                 )
-                logger.error("customer_add_failed_gcp_update_failed", 
-                            customer=customer_name)
+                logger.error(f"NEW_CUSTOMER: Failed to update GCP secret, removed '{customer_name}' from local list")
                 
         except Exception as e:
-            logger.error("new_customer_command_error", 
-                        user=username, 
-                        error=str(e))
+            logger.error(f"NEW_CUSTOMER: Error processing command '{text}': {e}")
             await message.reply_text(
                 "❌ კლიენტის დამატებისას მოხდა შეცდომა. "
                 "გთხოვთ სცადოთ მოგვიანებით."
@@ -754,12 +772,11 @@ class ImprovedOrderBot:
     async def update_gcp_secret(self) -> bool:
         """Update GCP secret with current customer list."""
         if not GCP_AVAILABLE:
-            logger.error("gcp_secret_manager_not_available_for_update")
+            logger.error("UPDATE_SECRET: GCP Secret Manager library not available")
             return False
         
         try:
-            logger.info("updating_gcp_secret", 
-                       customer_count=len(self.customers))
+            logger.info(f"UPDATE_SECRET: Updating GCP secret with {len(self.customers)} customers")
             
             # Initialize client
             client = secretmanager.SecretManagerServiceClient()
@@ -768,7 +785,7 @@ class ImprovedOrderBot:
             # Prepare the new secret data
             secret_data = json.dumps(self.customers, ensure_ascii=False, indent=2)
             
-            logger.info("secret_data_prepared", size=len(secret_data))
+            logger.info(f"UPDATE_SECRET: Secret data size: {len(secret_data)} characters")
             
             # Add a new version to the secret
             response = client.add_secret_version(
@@ -778,12 +795,11 @@ class ImprovedOrderBot:
                 }
             )
             
-            logger.info("gcp_secret_updated_successfully", 
-                       version=response.name)
+            logger.info(f"UPDATE_SECRET: ✅ Successfully created new secret version: {response.name}")
             return True
             
         except Exception as e:
-            logger.error("failed_to_update_gcp_secret", error=str(e))
+            logger.error(f"UPDATE_SECRET: ❌ Failed to update GCP secret: {e}")
             return False
 
 async def main():
