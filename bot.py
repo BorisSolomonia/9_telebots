@@ -71,12 +71,10 @@ class PaymentBot:
             if self._load_from_file():
                 return  # Successfully loaded from file
         
-        # If file doesn't exist or loading failed, try GCP secret
+        # If file doesn't exist or loading failed, try GCP secret (direct to memory)
         logger.info("CUSTOMER_LOADING: customers.json not found or failed to load, trying GCP Secret Manager...")
-        if self._fetch_from_gcp_secret():
-            # After fetching from secret, try loading again
-            if self._load_from_file():
-                return
+        if self._load_from_gcp_secret():
+            return  # Successfully loaded from secret
         
         # Final fallback - empty list
         logger.error("CUSTOMER_LOADING: ❌ All methods failed, starting with empty customer list")
@@ -113,8 +111,8 @@ class PaymentBot:
             logger.error(f"CUSTOMER_LOADING: ❌ Error loading customers.json: {e}")
             return False
     
-    def _fetch_from_gcp_secret(self) -> bool:
-        """Fetch customers data from GCP Secret Manager and save to file."""
+    def _load_from_gcp_secret(self) -> bool:
+        """Load customers data directly from GCP Secret Manager to memory."""
         if not GCP_AVAILABLE:
             logger.error("CUSTOMER_LOADING: GCP Secret Manager library not available")
             return False
@@ -142,11 +140,18 @@ class PaymentBot:
             
             logger.info(f"CUSTOMER_LOADING: Parsed {len(customers_data)} customer entries from secret")
             
-            # Save to local file
-            with open('customers.json', 'w', encoding='utf-8') as f:
-                json.dump(customers_data, f, ensure_ascii=False, indent=2)
+            # Store directly in memory (no file write needed for read-only filesystem)
+            self.customers = customers_data
             
-            logger.info("CUSTOMER_LOADING: ✅ Successfully created customers.json from GCP secret")
+            # Log first few customers as sample
+            if self.customers:
+                sample_customers = self.customers[:3]
+                logger.info(f"CUSTOMER_LOADING: Sample customers from secret: {sample_customers}")
+            
+            logger.info("CUSTOMER_LOADING: ✅ Successfully loaded customer data from GCP secret to memory")
+            
+            # Build name mapping
+            self._build_name_mapping()
             return True
             
         except json.JSONDecodeError as e:
