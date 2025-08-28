@@ -27,7 +27,7 @@ services:
     volumes:
       - shared_customer_data:/app/data:rw  # SHARED customers.json
       - ./logs:/app/logs:rw
-      - ./credentials.json:/app/credentials.json:ro
+      - ./secure-docker-setup/credentials.json:/app/credentials.json:ro
     
     command: ["improved_order_bot.py"]
     
@@ -70,7 +70,7 @@ services:
     volumes:
       - shared_customer_data:/app/data:rw  # SHARED customers.json
       - ./logs:/app/logs:rw
-      - ./credentials.json:/app/credentials.json:ro
+      - ./secure-docker-setup/credentials.json:/app/credentials.json:ro
       
     command: ["bot.py"]  # Different script
     
@@ -91,7 +91,7 @@ services:
     image: redis:7-alpine
     container_name: bot-redis
     restart: unless-stopped
-    command: redis-server --appendonly yes --requirepass ${REDIS_PASSWORD}
+    command: ["redis-server", "--appendonly", "yes", "--requirepass", "${REDIS_PASSWORD}"]
     volumes:
       - redis_data:/data
     networks:
