@@ -51,16 +51,41 @@ class PaymentBot:
 
     def _load_customers(self) -> None:
         """Load customers from JSON or initialize with defaults."""
+        logger.info("CUSTOMER_LOADING: Starting customer data initialization...")
+        
         try:
+            logger.info("CUSTOMER_LOADING: Attempting to load customers.json...")
             with open('customers.json', 'r', encoding='utf-8') as f:
                 self.customers = json.load(f)
-            logger.info(f"Loaded {len(self.customers)} customers from customers.json")
-        except (FileNotFoundError, json.JSONDecodeError):
-            # Initialize with empty list or default customers
+            
+            logger.info(f"CUSTOMER_LOADING: ✅ Successfully loaded customers.json")
+            logger.info(f"CUSTOMER_LOADING: Found {len(self.customers)} total customer entries")
+            
+            # Log first few customers as sample
+            if self.customers:
+                sample_customers = self.customers[:3]
+                logger.info(f"CUSTOMER_LOADING: Sample customers: {sample_customers}")
+            
+        except FileNotFoundError:
+            logger.error("CUSTOMER_LOADING: ❌ customers.json file not found!")
+            logger.error("CUSTOMER_LOADING: This means customer lookup will fail")
+            logger.error("CUSTOMER_LOADING: File should be at: customers.json")
             self.customers = []
-            logger.warning("No customers.json found, starting with empty customer list")
+        except json.JSONDecodeError as e:
+            logger.error(f"CUSTOMER_LOADING: ❌ Invalid JSON in customers.json: {e}")
+            logger.error("CUSTOMER_LOADING: Customer data is corrupted")
+            self.customers = []
+        except Exception as e:
+            logger.error(f"CUSTOMER_LOADING: ❌ Unexpected error loading customers: {e}")
+            self.customers = []
+        
+        if not self.customers:
+            logger.warning("CUSTOMER_LOADING: ⚠️ Starting with empty customer list - no customer matching will work!")
         
         # Build name mapping
+        logger.info("CUSTOMER_LOADING: Building customer name mapping...")
+        mapping_count = 0
+        
         for customer in self.customers:
             customer = customer.strip()
             if customer:
@@ -68,10 +93,22 @@ class PaymentBot:
                 match = re.match(r'\((.*?)\)\s*(.*)', customer)
                 if match:
                     name = match.group(2).strip()
-                    self.name_to_full[name] = customer
+                    if name:  # Only add non-empty names
+                        self.name_to_full[name] = customer
+                        mapping_count += 1
                 else:
                     # Just use the whole string as name
                     self.name_to_full[customer] = customer
+                    mapping_count += 1
+        
+        logger.info(f"CUSTOMER_LOADING: ✅ Created {mapping_count} customer name mappings")
+        
+        if mapping_count > 0:
+            # Log sample mappings
+            sample_mappings = dict(list(self.name_to_full.items())[:5])
+            logger.info(f"CUSTOMER_LOADING: Sample mappings: {sample_mappings}")
+        else:
+            logger.warning("CUSTOMER_LOADING: ⚠️ No customer name mappings created!")
 
     def parse_payment(self, text: str) -> Optional[Tuple[str, float]]:
         """Parse payment text into name and amount.
@@ -204,6 +241,12 @@ class PaymentBot:
     async def find_customer(self, name: str) -> Optional[str]:
         """Find customer by name - first direct match, then GPT if needed."""
         logger.info(f"CUSTOMER_SEARCH: Starting search for customer: '{name}'")
+        logger.info(f"CUSTOMER_SEARCH: Available customers: {len(self.customers)} total, {len(self.name_to_full)} mapped names")
+        
+        if len(self.customers) == 0:
+            logger.error("CUSTOMER_SEARCH: ❌ No customers loaded! Cannot perform search.")
+            logger.error("CUSTOMER_SEARCH: Check if customers.json exists and contains valid data")
+            return None
         
         # Step 1: Check for direct match
         if name in self.name_to_full:
