@@ -77,19 +77,84 @@ class PaymentBot:
         """Parse payment text into name and amount.
         Format: customer_name amount [currency]
         """
+        logger.info(f"PARSING: Attempting to parse message: '{text}'")
+        
         # Pattern: name (any text) space amount (digits with optional decimal)
-        pattern = r'^(.*)\s+(\d+(?:\.\d+)?)\s*(?:GEL|USD|EUR)?$'
+        pattern = r'^(.*)\s+(\d+(?:\.\d+)?)\s*(?:GEL|USD|EUR|ლარი|₾)?$'
         match = re.match(pattern, text.strip())
         
         if match:
             name = match.group(1).strip()
+            amount_str = match.group(2).strip()
+            logger.info(f"PARSING: Regex extracted - Customer name: '{name}', Amount: '{amount_str}'")
+            
             try:
-                amount = float(match.group(2))
+                amount = float(amount_str)
                 if amount > 0:
+                    logger.info(f"PARSING: Successfully parsed - Name: '{name}', Amount: {amount}")
                     return name, amount
-            except ValueError:
-                pass
+                else:
+                    logger.warning(f"PARSING: Amount must be positive, got: {amount}")
+            except ValueError as e:
+                logger.error(f"PARSING: Failed to convert amount '{amount_str}' to float: {e}")
+        else:
+            logger.warning(f"PARSING: Message '{text}' does not match expected format (name amount [currency])")
+        
         return None
+
+    @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=10))
+    async def extract_payment_with_ai(self, text: str) -> Optional[Tuple[str, float]]:
+        """Use OpenAI to extract customer name and amount when regex fails."""
+        logger.info(f"OPENAI_EXTRACTION: Attempting AI-based payment extraction for: '{text}'")
+        
+        system_prompt = (
+            "You are a payment message parser. Extract customer name and payment amount from Georgian/English text.\n"
+            "Return ONLY a JSON object with 'name' and 'amount' fields, or 'null' if no valid payment found.\n"
+            "Example: {\"name\": \"შპს მაგსი\", \"amount\": 150.5}\n"
+            "Handle various formats: name+amount, amount+name, with/without currency symbols."
+        )
+        
+        try:
+            response = openai_client.chat.completions.create(
+                model="gpt-3.5-turbo",
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": f"Extract payment info: {text}"}
+                ],
+                max_tokens=100,
+                temperature=0.1
+            )
+            
+            result = response.choices[0].message.content.strip()
+            usage = response.usage
+            
+            logger.info(f"OPENAI_EXTRACTION: GPT response: '{result}'")
+            logger.info(f"OPENAI_EXTRACTION: Token usage - Prompt: {usage.prompt_tokens}, Completion: {usage.completion_tokens}, Total: {usage.total_tokens}")
+            
+            if result == "null":
+                logger.info(f"OPENAI_EXTRACTION: GPT could not extract payment info from: '{text}'")
+                return None
+            
+            # Parse JSON response
+            try:
+                data = json.loads(result)
+                name = data.get('name', '').strip()
+                amount = float(data.get('amount', 0))
+                
+                if name and amount > 0:
+                    logger.info(f"OPENAI_EXTRACTION: Successfully extracted - Name: '{name}', Amount: {amount}")
+                    return name, amount
+                else:
+                    logger.warning(f"OPENAI_EXTRACTION: Invalid extracted data - Name: '{name}', Amount: {amount}")
+            
+            except (json.JSONDecodeError, ValueError, TypeError) as e:
+                logger.error(f"OPENAI_EXTRACTION: Failed to parse GPT response '{result}': {e}")
+            
+            return None
+            
+        except Exception as e:
+            logger.error(f"OPENAI_EXTRACTION: Error during AI extraction for '{text}': {e}")
+            return None
 
     async def handle_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Handle incoming messages - simplified flow."""
@@ -106,12 +171,18 @@ class PaymentBot:
         # Parse the payment
         parsed = self.parse_payment(text)
         if not parsed:
-            # Not a valid payment format, ignore
-            logger.debug(f"Could not parse payment from: '{text}'")
-            return
-
-        name, amount = parsed
-        logger.info(f"Parsed payment: {name} -> {amount}")
+            # Try OpenAI as fallback for parsing
+            logger.info(f"FALLBACK: Regex parsing failed, attempting OpenAI extraction for: '{text}'")
+            ai_parsed = await self.extract_payment_with_ai(text)
+            if ai_parsed:
+                name, amount = ai_parsed
+                logger.info(f"FALLBACK: OpenAI successfully extracted - Name: '{name}', Amount: {amount}")
+            else:
+                logger.warning(f"FALLBACK: OpenAI also failed to parse: '{text}'")
+                return
+        else:
+            name, amount = parsed
+            logger.info(f"PARSING RESULT: Successfully parsed payment - Customer: '{name}', Amount: {amount}")
 
         # Try to find customer
         customer_full = await self.find_customer(name)
@@ -132,38 +203,55 @@ class PaymentBot:
 
     async def find_customer(self, name: str) -> Optional[str]:
         """Find customer by name - first direct match, then GPT if needed."""
+        logger.info(f"CUSTOMER_SEARCH: Starting search for customer: '{name}'")
+        
         # Step 1: Check for direct match
         if name in self.name_to_full:
-            logger.info(f"Direct match found: '{name}'")
+            logger.info(f"CUSTOMER_SEARCH: Direct match found - '{name}' -> '{self.name_to_full[name]}'")
             return self.name_to_full[name]
         
         # Step 2: Check if it's already a full customer string
         if name in self.customers:
-            logger.info(f"Full customer string provided: '{name}'")
+            logger.info(f"CUSTOMER_SEARCH: Full customer string provided: '{name}'")
             return name
         
         # Step 3: Case-insensitive search
         name_lower = name.lower()
         for short_name, full_name in self.name_to_full.items():
             if short_name.lower() == name_lower:
-                logger.info(f"Case-insensitive match found: '{name}' -> '{full_name}'")
+                logger.info(f"CUSTOMER_SEARCH: Case-insensitive match found - '{name}' -> '{full_name}'")
                 return full_name
         
-        # Step 4: Use GPT to try to map the name
-        logger.info(f"No direct match for '{name}', trying GPT mapping...")
+        # Step 4: Find closest matches for logging
+        customer_names = list(self.name_to_full.keys())
+        closest_matches = difflib.get_close_matches(name, customer_names, n=5, cutoff=0.3)
+        
+        if closest_matches:
+            logger.info(f"CUSTOMER_SEARCH: No exact match found. Closest matches for '{name}': {closest_matches}")
+            # Also log the full customer names for the closest matches
+            closest_full = [f"'{match}' -> '{self.name_to_full[match]}'" for match in closest_matches]
+            logger.info(f"CUSTOMER_SEARCH: Closest full customer entries: {closest_full}")
+        else:
+            logger.warning(f"CUSTOMER_SEARCH: No close matches found for '{name}' (using cutoff 0.3)")
+        
+        # Step 5: Use GPT to try to map the name
+        logger.info(f"CUSTOMER_SEARCH: No direct match for '{name}', trying GPT mapping...")
         gpt_result = await self.map_customer_with_gpt(name)
         
         if gpt_result:
-            logger.info(f"GPT successfully mapped: '{name}' -> '{gpt_result}'")
+            logger.info(f"CUSTOMER_SEARCH: GPT successfully mapped '{name}' -> '{gpt_result}'")
             return gpt_result
         
-        logger.warning(f"Could not find customer: '{name}'")
+        logger.warning(f"CUSTOMER_SEARCH: Could not find customer '{name}' through any method")
         return None
 
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=10))
     async def map_customer_with_gpt(self, customer_name: str) -> Optional[str]:
         """Use GPT to map customer name to exact match from list."""
+        logger.info(f"OPENAI_MAPPING: Starting GPT customer mapping for: '{customer_name}'")
+        
         if not self.customers:
+            logger.warning("OPENAI_MAPPING: No customers loaded, cannot perform mapping")
             return None
         
         # Get closest matches to reduce list size for GPT
@@ -173,9 +261,13 @@ class PaymentBot:
         # Get full customer entries for closest matches
         if closest_matches:
             relevant_customers = [self.name_to_full[name] for name in closest_matches]
+            logger.info(f"OPENAI_MAPPING: Using {len(closest_matches)} closest matches as context: {closest_matches}")
         else:
             # Use first 30 customers if no close matches
             relevant_customers = self.customers[:30]
+            logger.info(f"OPENAI_MAPPING: No close matches found, using first {len(relevant_customers)} customers as context")
+        
+        logger.info(f"OPENAI_MAPPING: Sending {len(relevant_customers)} customer entries to GPT for context")
         
         system_prompt = (
             "You are a customer name mapping assistant. Map the input name to the EXACT customer from the list.\n"
@@ -184,27 +276,39 @@ class PaymentBot:
             f"CUSTOMERS:\n{json.dumps(relevant_customers, ensure_ascii=False)}"
         )
         
+        user_message = f"Find customer: {customer_name}"
+        logger.info(f"OPENAI_MAPPING: Sending request to GPT-3.5-turbo with message: '{user_message}'")
+        
         try:
             response = openai_client.chat.completions.create(
                 model="gpt-3.5-turbo",
                 messages=[
                     {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": f"Find customer: {customer_name}"}
+                    {"role": "user", "content": user_message}
                 ],
                 max_tokens=100,
                 temperature=0.1
             )
             
             result = response.choices[0].message.content.strip()
+            usage = response.usage
+            
+            logger.info(f"OPENAI_MAPPING: GPT response received: '{result}'")
+            logger.info(f"OPENAI_MAPPING: Token usage - Prompt: {usage.prompt_tokens}, Completion: {usage.completion_tokens}, Total: {usage.total_tokens}")
             
             # Verify the result is in our customer list
             if result != "null" and result in self.customers:
+                logger.info(f"OPENAI_MAPPING: GPT mapping successful! '{customer_name}' -> '{result}'")
                 return result
+            elif result == "null":
+                logger.info(f"OPENAI_MAPPING: GPT could not find a match for '{customer_name}' (returned 'null')")
+            else:
+                logger.warning(f"OPENAI_MAPPING: GPT returned invalid result '{result}' - not found in customer list")
             
             return None
             
         except Exception as e:
-            logger.error(f"GPT mapping error: {e}")
+            logger.error(f"OPENAI_MAPPING: GPT mapping error for '{customer_name}': {e}")
             return None
 
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=10))
