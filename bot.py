@@ -46,8 +46,50 @@ SCOPE = ['https://spreadsheets.google.com/feeds', 'https://www.googleapis.com/au
 CREDS = ServiceAccountCredentials.from_json_keyfile_name(CREDS_FILE, SCOPE)
 CLIENT = gspread.authorize(CREDS)
 
-# Logging
-logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
+# Logging with rotation and cleanup
+class LogManager:
+    """Manages log rotation and cleanup to save disk space."""
+    
+    def __init__(self, max_lines=1000):
+        self.max_lines = max_lines
+        self.line_count = 0
+        self.log_file = 'bot.log'
+        self.setup_logging()
+    
+    def setup_logging(self):
+        """Setup logging configuration."""
+        logging.basicConfig(
+            format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+            level=logging.INFO,
+            handlers=[
+                logging.StreamHandler(),  # Console output
+                logging.FileHandler(self.log_file, encoding='utf-8')  # File output
+            ]
+        )
+    
+    def check_and_rotate_logs(self):
+        """Check log file size and rotate if needed."""
+        try:
+            if Path(self.log_file).exists():
+                with open(self.log_file, 'r', encoding='utf-8') as f:
+                    lines = f.readlines()
+                
+                if len(lines) > self.max_lines:
+                    logger.info(f"LOG_ROTATION: Log file has {len(lines)} lines, rotating (max: {self.max_lines})")
+                    
+                    # Keep only the last 500 lines to avoid immediate rotation
+                    keep_lines = lines[-500:]
+                    
+                    with open(self.log_file, 'w', encoding='utf-8') as f:
+                        f.writelines(keep_lines)
+                    
+                    logger.info(f"LOG_ROTATION: ✅ Rotated log file, kept last 500 lines")
+        except Exception as e:
+            # Don't let log rotation break the bot
+            pass
+
+# Initialize log manager
+log_manager = LogManager(max_lines=1000)
 logger = logging.getLogger(__name__)
 
 class PaymentBot:
@@ -58,6 +100,7 @@ class PaymentBot:
         self.name_to_full: Dict[str, str] = {}
         self.project_id = "527887913788"
         self.secret_id = "customers-json"
+        self.message_count = 0
         self._load_customers()
 
     def _load_customers(self) -> None:
@@ -281,6 +324,11 @@ class PaymentBot:
         if not message or not message.text:
             return
 
+        # Increment message counter and check for log rotation
+        self.message_count += 1
+        if self.message_count % 100 == 0:  # Check every 100 messages
+            log_manager.check_and_rotate_logs()
+
         text = message.text
         username = message.from_user.username or f"{message.from_user.first_name or ''} {message.from_user.last_name or ''}".strip()
         source = 'Edited' if update.edited_message else 'Direct'
@@ -451,6 +499,8 @@ class PaymentBot:
 
 async def main() -> None:
     """Main bot setup and run."""
+    logger.info("BOT_STARTUP: Starting Payment Bot with log rotation (max 1000 lines)")
+    
     bot = PaymentBot()
     application = Application.builder().token(TELEGRAM_TOKEN).build()
     
