@@ -39,6 +39,15 @@ import structlog
 
 nest_asyncio.apply()
 
+# GCP Secret Manager import (optional - only if needed)
+try:
+    from google.cloud import secretmanager
+    GCP_AVAILABLE = True
+except ImportError:
+    logger = structlog.get_logger()
+    logger.warning("google-cloud-secret-manager not available - GCP secret fetch disabled")
+    GCP_AVAILABLE = False
+
 # Configure structured logging
 structlog.configure(
     processors=[
@@ -282,6 +291,10 @@ class ImprovedOrderBot:
         self.pending_messages: set[int] = set()
         self.last_cleanup = time.time()
         
+        # GCP Secret Manager settings
+        self.project_id = "527887913788"
+        self.secret_id = "customers-json"
+        
         # Initialize services
         self.openai_client = OpenAIClientManager(config.openai_api_key)
         self.sheets_client = SheetsClientManager(config.creds_file)
@@ -319,25 +332,80 @@ class ImprovedOrderBot:
             logger.error("shutdown_save_error", error=str(e))
     
     async def _load_customers(self) -> None:
-        """Load customers from file with proper error handling."""
-        try:
-            data = await SecureFileManager.read_json(self.config.customers_file)
-            if data is None:
-                self.customers = []
-                logger.warning("customers_file_not_found", 
-                             file=self.config.customers_file)
-            elif isinstance(data, list):
-                self.customers = data
-                logger.info("customers_loaded", 
-                           count=len(self.customers),
-                           file=self.config.customers_file)
+        """Load customers from file or fetch from GCP secret if not found."""
+        logger.info("customer_loading_started", file=self.config.customers_file)
+        
+        # First, try to load existing file
+        data = await SecureFileManager.read_json(self.config.customers_file)
+        if data is not None and isinstance(data, list) and len(data) > 0:
+            self.customers = data
+            logger.info("customers_loaded_from_file", 
+                       count=len(self.customers),
+                       file=self.config.customers_file)
+        else:
+            # File doesn't exist or is empty, try GCP secret
+            logger.info("customers_file_not_found_trying_gcp_secret", 
+                       file=self.config.customers_file)
+            
+            if await self._load_from_gcp_secret():
+                logger.info("customers_loaded_from_gcp_secret", 
+                           count=len(self.customers))
             else:
-                raise ValueError("customers.json must contain a list")
-        except Exception as e:
-            logger.error("customers_load_error", error=str(e))
-            self.customers = []
+                logger.error("customers_load_failed_using_empty_list")
+                self.customers = []
         
         self._build_customer_mapping()
+    
+    async def _load_from_gcp_secret(self) -> bool:
+        """Load customers data directly from GCP Secret Manager to memory."""
+        if not GCP_AVAILABLE:
+            logger.error("gcp_secret_manager_not_available")
+            return False
+        
+        try:
+            logger.info("fetching_from_gcp_secret", 
+                       project=self.project_id, 
+                       secret=self.secret_id)
+            
+            # Initialize client
+            client = secretmanager.SecretManagerServiceClient()
+            secret_name = f"projects/{self.project_id}/secrets/{self.secret_id}/versions/latest"
+            
+            logger.info("accessing_secret", name=secret_name)
+            response = client.access_secret_version(request={"name": secret_name})
+            
+            # Decode the secret payload
+            secret_data = response.payload.data.decode("UTF-8")
+            logger.info("secret_data_retrieved", size=len(secret_data))
+            
+            # Parse and validate JSON
+            customers_data = json.loads(secret_data)
+            
+            if not isinstance(customers_data, list):
+                logger.error("invalid_secret_data_format", 
+                           expected="list", 
+                           got=type(customers_data).__name__)
+                return False
+            
+            logger.info("secret_data_parsed", count=len(customers_data))
+            
+            # Store directly in memory (no file write needed for read-only filesystem)
+            self.customers = customers_data
+            
+            # Log first few customers as sample
+            if self.customers:
+                sample_customers = self.customers[:3]
+                logger.info("sample_customers_from_secret", samples=sample_customers)
+            
+            logger.info("customers_loaded_from_secret_successfully")
+            return True
+            
+        except json.JSONDecodeError as e:
+            logger.error("invalid_json_in_secret", error=str(e))
+            return False
+        except Exception as e:
+            logger.error("failed_to_fetch_from_gcp_secret", error=str(e))
+            return False
     
     def _build_customer_mapping(self) -> None:
         """Build optimized customer name mapping."""
@@ -349,7 +417,10 @@ class ImprovedOrderBot:
                 match = re.match(r'\((.*?)\)\s*(.*)', customer)
                 name = match.group(2).strip() if match else customer
                 if name:
+                    # Store both lowercase for matching and original for display
                     self.name_to_full[name.lower()] = customer
+                    # Also store the full customer string for exact matching
+                    self.name_to_full[customer.lower()] = customer
         
         logger.debug("customer_mapping_built", count=len(self.name_to_full))
     
@@ -564,10 +635,15 @@ class ImprovedOrderBot:
             return
         
         try:
-            # Process order
+            # Check for commands first
             text = message.text.strip()
             logger.info("processing_message", user=username, text_length=len(text))
             
+            if text.startswith('new:'):
+                await self.handle_new_customer_command(text, message, username)
+                return
+            
+            # Process order
             parsed = await self.parse_order_with_gpt(text)
             
             if parsed:
@@ -605,6 +681,110 @@ class ImprovedOrderBot:
             await message.reply_text(
                 "დაფიქსირდა შეცდომა. გთხოვთ სცადოთ მოგვიანებით."
             )
+    
+    async def handle_new_customer_command(self, text: str, message, username: str) -> None:
+        """Handle 'new:<customer name>' command to add new customer."""
+        logger.info("new_customer_command", user=username, text=text)
+        
+        try:
+            customer_name = text[4:].strip()  # Remove 'new:' prefix
+            if not customer_name:
+                await message.reply_text(
+                    "❌ მომხმარებლის სახელი არ არის მითითებული.\n"
+                    "გამოიყენეთ: new:კლიენტის სახელი"
+                )
+                return
+            
+            logger.info("attempting_to_add_customer", customer=customer_name)
+            
+            # Check if customer already exists
+            if customer_name in self.customers:
+                logger.info("customer_already_exists", customer=customer_name)
+                await message.reply_text(
+                    f"⚠️ კლიენტი '{customer_name}' უკვე არსებობს."
+                )
+                return
+            
+            # Add to local list
+            self.customers.append(customer_name)
+            
+            # Rebuild customer mapping
+            self._build_customer_mapping()
+            
+            logger.info("customer_added_to_local_list", 
+                       customer=customer_name, 
+                       total_customers=len(self.customers))
+            
+            # Update GCP secret
+            success = await self.update_gcp_secret()
+            
+            if success:
+                await message.reply_text(
+                    f"✅ კლიენტი დამატებულია:\n{customer_name}\n\n"
+                    f"სულ კლიენტები: {len(self.customers)}"
+                )
+                logger.info("customer_added_successfully", 
+                           customer=customer_name,
+                           gcp_updated=True)
+            else:
+                # Remove from local list if GCP update failed
+                self.customers.remove(customer_name)
+                self._build_customer_mapping()
+                
+                await message.reply_text(
+                    "❌ კლიენტის დამატება ვერ მოხერხდა.\n"
+                    "GCP Secret Manager-ის განახლება ვერ მოხერხდა."
+                )
+                logger.error("customer_add_failed_gcp_update_failed", 
+                            customer=customer_name)
+                
+        except Exception as e:
+            logger.error("new_customer_command_error", 
+                        user=username, 
+                        error=str(e))
+            await message.reply_text(
+                "❌ კლიენტის დამატებისას მოხდა შეცდომა. "
+                "გთხოვთ სცადოთ მოგვიანებით."
+            )
+    
+    @retry(
+        stop=stop_after_attempt(3), 
+        wait=wait_exponential(multiplier=1, min=2, max=10)
+    )
+    async def update_gcp_secret(self) -> bool:
+        """Update GCP secret with current customer list."""
+        if not GCP_AVAILABLE:
+            logger.error("gcp_secret_manager_not_available_for_update")
+            return False
+        
+        try:
+            logger.info("updating_gcp_secret", 
+                       customer_count=len(self.customers))
+            
+            # Initialize client
+            client = secretmanager.SecretManagerServiceClient()
+            parent = f"projects/{self.project_id}/secrets/{self.secret_id}"
+            
+            # Prepare the new secret data
+            secret_data = json.dumps(self.customers, ensure_ascii=False, indent=2)
+            
+            logger.info("secret_data_prepared", size=len(secret_data))
+            
+            # Add a new version to the secret
+            response = client.add_secret_version(
+                request={
+                    "parent": parent,
+                    "payload": {"data": secret_data.encode("UTF-8")}
+                }
+            )
+            
+            logger.info("gcp_secret_updated_successfully", 
+                       version=response.name)
+            return True
+            
+        except Exception as e:
+            logger.error("failed_to_update_gcp_secret", error=str(e))
+            return False
 
 async def main():
     """Main function with improved error handling and graceful shutdown."""
