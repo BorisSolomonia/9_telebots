@@ -472,6 +472,16 @@ class ImprovedOrderBot:
             logger.info(f"OPENAI_ORDER: Using cached result for order parsing")
             return cached_result
         
+        # Try to find customer using fuzzy matching before GPT
+        potential_customer = self._find_customer_fuzzy(text)
+        if potential_customer:
+            logger.info(f"OPENAI_ORDER: Found customer via fuzzy matching: '{potential_customer}'")
+            # Try to extract amount and product from the text
+            simple_parse = self._simple_parse_with_customer(text, potential_customer)
+            if simple_parse:
+                logger.info(f"OPENAI_ORDER: Successfully parsed without GPT: {simple_parse}")
+                return simple_parse
+        
         # Prepare GPT request
         system_prompt = self._build_gpt_system_prompt(customer_list)
         logger.info(f"OPENAI_ORDER: Sending {len(customer_list)} customer entries to GPT for context")
@@ -552,6 +562,47 @@ class ImprovedOrderBot:
             return json.loads(content)
         except json.JSONDecodeError:
             return None
+    
+    def _find_customer_fuzzy(self, text: str) -> Optional[str]:
+        """Try to find customer using fuzzy/partial matching."""
+        text_lower = text.lower()
+        
+        # Look for partial matches in customer names
+        for customer_key, full_customer in self.name_to_full.items():
+            customer_words = customer_key.split()
+            for word in customer_words:
+                if len(word) > 3 and word in text_lower:  # Only match words longer than 3 chars
+                    logger.info(f"OPENAI_ORDER: Fuzzy match found - word '{word}' in text matches customer '{full_customer}'")
+                    return full_customer
+        
+        return None
+    
+    def _simple_parse_with_customer(self, text: str, customer: str) -> Optional[Dict[str, Any]]:
+        """Try to parse order with known customer using regex."""
+        # Remove customer name from text and try to find amount and product
+        customer_name = customer.split(') ')[1] if ') ' in customer else customer
+        text_without_customer = text.replace(customer_name, '').strip()
+        
+        # Look for amount (number)
+        amount_match = re.search(r'(\d+(?:\.\d+)?)', text_without_customer)
+        if not amount_match:
+            return None
+        
+        amount = float(amount_match.group(1))
+        
+        # The rest should be product (remove amount and clean up)
+        product = re.sub(r'\d+(?:\.\d+)?', '', text_without_customer).strip()
+        product = re.sub(r'\s+', ' ', product)  # Clean up multiple spaces
+        product = product.strip('- .,')  # Clean up punctuation
+        
+        if not product:
+            product = "საქონელი"  # Default product name
+        
+        return {
+            'customer': customer,
+            'amount': amount,
+            'product': product
+        }
     
     def _validate_parsed_order(self, parsed: Dict[str, Any]) -> bool:
         """Validate parsed order data."""

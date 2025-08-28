@@ -448,7 +448,25 @@ class PaymentBot:
                 logger.info(f"CUSTOMER_SEARCH: Case-insensitive match found - '{name}' -> '{full_name}'")
                 return full_name
         
-        # Step 4: Find closest matches for logging
+        # Step 4: Try partial matching (substring search)
+        name_lower = name.lower()
+        partial_matches = []
+        for short_name, full_name in self.name_to_full.items():
+            if name_lower in short_name.lower() or short_name.lower() in name_lower:
+                partial_matches.append((short_name, full_name))
+        
+        if partial_matches:
+            logger.info(f"CUSTOMER_SEARCH: Partial matches found for '{name}': {[match[0] for match in partial_matches]}")
+            # If only one partial match, use it
+            if len(partial_matches) == 1:
+                best_match = partial_matches[0][1]
+                logger.info(f"CUSTOMER_SEARCH: Using single partial match: '{name}' -> '{best_match}'")
+                return best_match
+            else:
+                # Multiple matches, log them but continue to GPT
+                logger.info(f"CUSTOMER_SEARCH: Multiple partial matches, will try GPT: {[match[0] for match in partial_matches]}")
+        
+        # Step 5: Find closest matches for logging
         customer_names = list(self.name_to_full.keys())
         closest_matches = difflib.get_close_matches(name, customer_names, n=5, cutoff=0.3)
         
@@ -460,8 +478,8 @@ class PaymentBot:
         else:
             logger.warning(f"CUSTOMER_SEARCH: No close matches found for '{name}' (using cutoff 0.3)")
         
-        # Step 5: Use GPT to try to map the name
-        logger.info(f"CUSTOMER_SEARCH: No direct match for '{name}', trying GPT mapping...")
+        # Step 6: Use GPT to try to map the name
+        logger.info(f"CUSTOMER_SEARCH: No direct/partial match for '{name}', trying GPT mapping...")
         gpt_result = await self.map_customer_with_gpt(name)
         
         if gpt_result:
