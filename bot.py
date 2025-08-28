@@ -279,6 +279,95 @@ class PaymentBot:
             logger.error(f"OPENAI_EXTRACTION: Error during AI extraction for '{text}': {e}")
             return None
 
+    async def handle_new_customer_command(self, text: str, message, username: str) -> None:
+        """Handle 'new:<customer name>' command to add new customer."""
+        logger.info(f"NEW_CUSTOMER: Processing command from {username}: '{text}'")
+        
+        # Extract customer name from command
+        try:
+            customer_name = text[4:].strip()  # Remove 'new:' prefix
+            if not customer_name:
+                await message.reply_text("❌ მომხმარებლის სახელი არ არის მითითებული.\nგამოიყენეთ: new:კლიენტის სახელი")
+                return
+            
+            logger.info(f"NEW_CUSTOMER: Attempting to add customer: '{customer_name}'")
+            
+            # Check if customer already exists
+            if customer_name in self.customers:
+                logger.info(f"NEW_CUSTOMER: Customer '{customer_name}' already exists")
+                await message.reply_text(f"⚠️ კლიენტი '{customer_name}' უკვე არსებობს.")
+                return
+            
+            # Add to local list
+            self.customers.append(customer_name)
+            
+            # Update name mapping
+            # Extract name from format: (code) name or just use full name
+            match = re.match(r'\((.*?)\)\s*(.*)', customer_name)
+            if match:
+                short_name = match.group(2).strip()
+                if short_name:
+                    self.name_to_full[short_name] = customer_name
+            else:
+                self.name_to_full[customer_name] = customer_name
+            
+            logger.info(f"NEW_CUSTOMER: Added '{customer_name}' to local list ({len(self.customers)} total customers)")
+            
+            # Update GCP secret
+            success = await self.update_gcp_secret()
+            
+            if success:
+                await message.reply_text(f"✅ კლიენტი დამატებულია:\n{customer_name}\n\nსულ კლიენტები: {len(self.customers)}")
+                logger.info(f"NEW_CUSTOMER: Successfully added '{customer_name}' and updated GCP secret")
+            else:
+                # Remove from local list if GCP update failed
+                self.customers.remove(customer_name)
+                if customer_name in self.name_to_full:
+                    del self.name_to_full[customer_name]
+                if match and short_name in self.name_to_full:
+                    del self.name_to_full[short_name]
+                
+                await message.reply_text(f"❌ კლიენტის დამატება ვერ მოხერხდა.\nGCP Secret Manager-ის განახლება ვერ მოხერხდა.")
+                logger.error(f"NEW_CUSTOMER: Failed to update GCP secret, removed '{customer_name}' from local list")
+                
+        except Exception as e:
+            logger.error(f"NEW_CUSTOMER: Error processing command '{text}': {e}")
+            await message.reply_text("❌ კლიენტის დამატებისას მოხდა შეცდომა. გთხოვთ სცადოთ მოგვიანებით.")
+    
+    @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=10))
+    async def update_gcp_secret(self) -> bool:
+        """Update GCP secret with current customer list."""
+        if not GCP_AVAILABLE:
+            logger.error("UPDATE_SECRET: GCP Secret Manager library not available")
+            return False
+        
+        try:
+            logger.info(f"UPDATE_SECRET: Updating GCP secret with {len(self.customers)} customers")
+            
+            # Initialize client
+            client = secretmanager.SecretManagerServiceClient()
+            parent = f"projects/{self.project_id}/secrets/{self.secret_id}"
+            
+            # Prepare the new secret data
+            secret_data = json.dumps(self.customers, ensure_ascii=False, indent=2)
+            
+            logger.info(f"UPDATE_SECRET: Secret data size: {len(secret_data)} characters")
+            
+            # Add a new version to the secret
+            response = client.add_secret_version(
+                request={
+                    "parent": parent,
+                    "payload": {"data": secret_data.encode("UTF-8")}
+                }
+            )
+            
+            logger.info(f"UPDATE_SECRET: ✅ Successfully created new secret version: {response.name}")
+            return True
+            
+        except Exception as e:
+            logger.error(f"UPDATE_SECRET: ❌ Failed to update GCP secret: {e}")
+            return False
+
     async def handle_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Handle incoming messages - simplified flow."""
         message = update.message or update.edited_message
@@ -293,6 +382,11 @@ class PaymentBot:
         source = 'Edited' if update.edited_message else 'Direct'
 
         logger.info(f"Processing message from {username}: '{text}'")
+
+        # Check for commands first
+        if text.startswith('new:'):
+            await self.handle_new_customer_command(text, message, username)
+            return
 
         # Parse the payment
         parsed = self.parse_payment(text)
