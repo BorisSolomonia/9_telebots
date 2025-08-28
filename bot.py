@@ -13,9 +13,18 @@ import re
 from datetime import datetime
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
 import nest_asyncio
+from pathlib import Path
 # from dotenv import load_dotenv
 # load_dotenv()  # Load environment variables from .env file
 nest_asyncio.apply()
+
+# GCP Secret Manager import (optional - only if needed)
+try:
+    from google.cloud import secretmanager
+    GCP_AVAILABLE = True
+except ImportError:
+    logger.warning("google-cloud-secret-manager not available - GCP secret fetch disabled")
+    GCP_AVAILABLE = False
 
 # Config from env vars
 TELEGRAM_TOKEN = os.environ['TELEGRAM_TOKEN_BOT']
@@ -47,14 +56,37 @@ class PaymentBot:
     def __init__(self) -> None:
         self.customers: list[str] = []
         self.name_to_full: Dict[str, str] = {}
+        self.project_id = "527887913788"
+        self.secret_id = "customers-json"
         self._load_customers()
 
     def _load_customers(self) -> None:
-        """Load customers from JSON or initialize with defaults."""
+        """Load customers from JSON or fetch from GCP secret if not found."""
         logger.info("CUSTOMER_LOADING: Starting customer data initialization...")
+        customers_file = Path('customers.json')
         
+        # First, try to load existing file
+        if customers_file.exists():
+            logger.info("CUSTOMER_LOADING: customers.json found, attempting to load...")
+            if self._load_from_file():
+                return  # Successfully loaded from file
+        
+        # If file doesn't exist or loading failed, try GCP secret
+        logger.info("CUSTOMER_LOADING: customers.json not found or failed to load, trying GCP Secret Manager...")
+        if self._fetch_from_gcp_secret():
+            # After fetching from secret, try loading again
+            if self._load_from_file():
+                return
+        
+        # Final fallback - empty list
+        logger.error("CUSTOMER_LOADING: ❌ All methods failed, starting with empty customer list")
+        self.customers = []
+        self._build_name_mapping()
+    
+    def _load_from_file(self) -> bool:
+        """Load customers from local customers.json file."""
         try:
-            logger.info("CUSTOMER_LOADING: Attempting to load customers.json...")
+            logger.info("CUSTOMER_LOADING: Reading customers.json...")
             with open('customers.json', 'r', encoding='utf-8') as f:
                 self.customers = json.load(f)
             
@@ -65,25 +97,70 @@ class PaymentBot:
             if self.customers:
                 sample_customers = self.customers[:3]
                 logger.info(f"CUSTOMER_LOADING: Sample customers: {sample_customers}")
+                self._build_name_mapping()
+                return True
+            else:
+                logger.warning("CUSTOMER_LOADING: customers.json is empty")
+                return False
             
         except FileNotFoundError:
-            logger.error("CUSTOMER_LOADING: ❌ customers.json file not found!")
-            logger.error("CUSTOMER_LOADING: This means customer lookup will fail")
-            logger.error("CUSTOMER_LOADING: File should be at: customers.json")
-            self.customers = []
+            logger.warning("CUSTOMER_LOADING: customers.json file not found")
+            return False
         except json.JSONDecodeError as e:
             logger.error(f"CUSTOMER_LOADING: ❌ Invalid JSON in customers.json: {e}")
-            logger.error("CUSTOMER_LOADING: Customer data is corrupted")
-            self.customers = []
+            return False
         except Exception as e:
-            logger.error(f"CUSTOMER_LOADING: ❌ Unexpected error loading customers: {e}")
-            self.customers = []
+            logger.error(f"CUSTOMER_LOADING: ❌ Error loading customers.json: {e}")
+            return False
+    
+    def _fetch_from_gcp_secret(self) -> bool:
+        """Fetch customers data from GCP Secret Manager and save to file."""
+        if not GCP_AVAILABLE:
+            logger.error("CUSTOMER_LOADING: GCP Secret Manager library not available")
+            return False
         
-        if not self.customers:
-            logger.warning("CUSTOMER_LOADING: ⚠️ Starting with empty customer list - no customer matching will work!")
-        
-        # Build name mapping
+        try:
+            logger.info(f"CUSTOMER_LOADING: Fetching from GCP secret: projects/{self.project_id}/secrets/{self.secret_id}")
+            
+            # Initialize client
+            client = secretmanager.SecretManagerServiceClient()
+            secret_name = f"projects/{self.project_id}/secrets/{self.secret_id}/versions/latest"
+            
+            logger.info(f"CUSTOMER_LOADING: Accessing secret: {secret_name}")
+            response = client.access_secret_version(request={"name": secret_name})
+            
+            # Decode the secret payload
+            secret_data = response.payload.data.decode("UTF-8")
+            logger.info(f"CUSTOMER_LOADING: Retrieved secret data ({len(secret_data)} characters)")
+            
+            # Parse and validate JSON
+            customers_data = json.loads(secret_data)
+            
+            if not isinstance(customers_data, list):
+                logger.error(f"CUSTOMER_LOADING: Expected list, got {type(customers_data)}")
+                return False
+            
+            logger.info(f"CUSTOMER_LOADING: Parsed {len(customers_data)} customer entries from secret")
+            
+            # Save to local file
+            with open('customers.json', 'w', encoding='utf-8') as f:
+                json.dump(customers_data, f, ensure_ascii=False, indent=2)
+            
+            logger.info("CUSTOMER_LOADING: ✅ Successfully created customers.json from GCP secret")
+            return True
+            
+        except json.JSONDecodeError as e:
+            logger.error(f"CUSTOMER_LOADING: ❌ Invalid JSON in GCP secret: {e}")
+            return False
+        except Exception as e:
+            logger.error(f"CUSTOMER_LOADING: ❌ Failed to fetch from GCP secret: {e}")
+            logger.error("CUSTOMER_LOADING: Make sure VM has proper GCP permissions for Secret Manager")
+            return False
+    
+    def _build_name_mapping(self):
+        """Build customer name mapping from loaded customers list."""
         logger.info("CUSTOMER_LOADING: Building customer name mapping...")
+        self.name_to_full = {}
         mapping_count = 0
         
         for customer in self.customers:
